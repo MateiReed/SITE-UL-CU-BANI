@@ -7,7 +7,7 @@ import React, {
   forwardRef,
   useImperativeHandle,
 } from "react";
-import { worldToFraction, getMapInfo, MAPS } from "@/lib/mapData";
+import { worldToFraction, getMapInfo, MAPS, normalizeMapId } from "@/lib/mapData";
 import type { MapInfo } from "@/lib/mapData";
 import type { RadarPayload, PlayerData, BombData } from "@/lib/radarStore";
 
@@ -43,7 +43,6 @@ export interface RadarCanvasHandle {
 }
 
 // ─── Visual Constants ────────────────────────────────────────────────────────
-const LERP_ALPHA = 0.92; // Ultra responsive real-time (no delay)
 const BASE_PLAYER_RADIUS = 9.5;
 const CONE_LENGTH = 28;
 const CONE_HALF_ANGLE = Math.PI / 6; // 30°
@@ -594,6 +593,9 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       panRef.current = { x: 0, y: 0 };
     }, [mapId]);
 
+    // Active canonical map ID
+    const activeMap = normalizeMapId(payload?.map || mapId);
+
     // Track the last processed payload to avoid re-processing
     const lastPayloadRef = useRef<RadarPayload | null>(null);
 
@@ -606,7 +608,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         bombRef.current = null;
         stateRef.current.clear();
       } else {
-        const mapInfo = getMapInfo(payload.map || mapId);
+        const targetMap = normalizeMapId(payload.map || mapId);
+        const mapInfo = getMapInfo(targetMap);
         const currentState = stateRef.current;
         const incomingIds = new Set<string>();
         const now = Date.now();
@@ -702,7 +705,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
 
       const w = canvas.width;
       const h = canvas.height;
-      const mapInfo = getMapInfo(mapId);
+      const currentActiveMap = normalizeMapId(payload?.map || mapId);
+      const mapInfo = getMapInfo(currentActiveMap);
 
       // Base square size that fits in viewport
       const baseSize = Math.min(w, h);
@@ -725,7 +729,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         ctx,
         w,
         h,
-        mapId,
+        currentActiveMap,
         mapInfo,
         showGrid,
         offsetX,
@@ -738,17 +742,34 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       // Draw C4 Bomb if present
       if (bombRef.current) {
         const b = bombRef.current;
-        b.rx = lerp(b.rx, b.tx, LERP_ALPHA);
-        b.ry = lerp(b.ry, b.ty, LERP_ALPHA);
+        const bdx = b.tx - b.rx;
+        const bdy = b.ty - b.ry;
+        if (Math.hypot(bdx, bdy) > 0.2 || isNaN(b.rx)) {
+          b.rx = b.tx;
+          b.ry = b.ty;
+        } else {
+          b.rx = lerp(b.rx, b.tx, 0.4);
+          b.ry = lerp(b.ry, b.ty, 0.4);
+        }
         const bcx = offsetX + b.rx * size;
         const bcy = offsetY + b.ry * size;
         drawBomb(ctx, b, bcx, bcy, mapInfo, realNow);
       }
 
-      // Draw Players
+      // Draw Players with adaptive continuous smoothness (zero delay, zero stutter)
       stateRef.current.forEach((p) => {
-        p.rx = lerp(p.rx, p.tx, LERP_ALPHA);
-        p.ry = lerp(p.ry, p.ty, LERP_ALPHA);
+        const dx = p.tx - p.rx;
+        const dy = p.ty - p.ry;
+        const dist = Math.hypot(dx, dy);
+
+        // Snap immediately on large jumps (spawn / round reset), interpolate smoothly for running/walking
+        if (dist > 0.18 || isNaN(p.rx) || isNaN(p.ry)) {
+          p.rx = p.tx;
+          p.ry = p.ty;
+        } else {
+          p.rx = lerp(p.rx, p.tx, 0.38);
+          p.ry = lerp(p.ry, p.ty, 0.38);
+        }
 
         const cx = offsetX + p.rx * size;
         const cy = offsetY + p.ry * size;
@@ -768,6 +789,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       rafRef.current = requestAnimationFrame(animate);
     }, [
       mapId,
+      payload,
       onFpsUpdate,
       showGrid,
       showNames,

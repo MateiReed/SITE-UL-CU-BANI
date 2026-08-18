@@ -136,8 +136,35 @@ export const MAPS: MapInfo[] = [
 
 export const DEFAULT_MAP = MAPS[0];
 
+export function normalizeMapId(rawMap: string): string {
+  if (!rawMap) return "de_dust2";
+  const clean = String(rawMap).toLowerCase().trim();
+
+  // 1. Direct ID / Display name match
+  for (const m of MAPS) {
+    if (m.id.toLowerCase() === clean || m.displayName.toLowerCase() === clean) {
+      return m.id;
+    }
+  }
+
+  // 2. Keyword / workshop path match (e.g. "workshop/3070244462/de_anubis", "maps/de_mirage.vpk", "anubis")
+  for (const m of MAPS) {
+    const rawShort = m.id.replace(/^(de_|cs_)/, "");
+    if (
+      clean.includes(m.id.toLowerCase()) ||
+      clean.includes(rawShort) ||
+      clean.includes(m.displayName.toLowerCase())
+    ) {
+      return m.id;
+    }
+  }
+
+  return "de_dust2";
+}
+
 export function getMapInfo(mapId: string): MapInfo {
-  return MAPS.find((m) => m.id === mapId) ?? DEFAULT_MAP;
+  const normalized = normalizeMapId(mapId);
+  return MAPS.find((m) => m.id === normalized) ?? DEFAULT_MAP;
 }
 
 export function worldToFraction(

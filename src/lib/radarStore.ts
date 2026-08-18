@@ -1,3 +1,5 @@
+import { normalizeMapId } from "./mapData";
+
 export interface ExecutorPlayer {
   steamid: string;
   name: string;
@@ -168,7 +170,7 @@ export function transformExecutorPayload(exec: ExecutorPayload): RadarPayload {
   });
 
   const transformed: RadarPayload = {
-    map: exec.map || "de_dust2",
+    map: normalizeMapId(exec.map || "de_dust2"),
     timestamp: Date.now(),
     bomb: bombData,
     players: transformedPlayers,

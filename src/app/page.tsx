@@ -8,7 +8,7 @@ import React, {
   useMemo,
 } from "react";
 import dynamic from "next/dynamic";
-import { MAPS } from "@/lib/mapData";
+import { MAPS, normalizeMapId } from "@/lib/mapData";
 import type { RadarPayload, ExecutorPayload } from "@/lib/radarStore";
 import { transformExecutorPayload } from "@/lib/radarStore";
 
@@ -63,23 +63,6 @@ class SoundFX {
 }
 
 const sfx = new SoundFX();
-
-function normalizeMapId(rawMap: string): string {
-  if (!rawMap) return "de_dust2";
-  const clean = rawMap.toLowerCase().trim();
-  const direct = MAPS.find(
-    (m) => m.id.toLowerCase() === clean || m.name.toLowerCase() === clean
-  );
-  if (direct) return direct.id;
-
-  const stripped = clean.replace(/^de_/, "").replace(/^cs_/, "");
-  const fuzzy = MAPS.find(
-    (m) => m.id.replace(/^de_/, "").replace(/^cs_/, "") === stripped
-  );
-  if (fuzzy) return fuzzy.id;
-
-  return "de_dust2";
-}
 
 // ─── Mock Data Simulator ───────────────────────────────────────────────────
 function generateMockPayload(mapId: string, tick: number): RadarPayload {
