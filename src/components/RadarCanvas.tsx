@@ -43,11 +43,11 @@ export interface RadarCanvasHandle {
 }
 
 // ─── Visual Constants ────────────────────────────────────────────────────────
-const LERP_ALPHA = 0.24;
+const LERP_ALPHA = 0.92; // Ultra responsive real-time (no delay)
 const BASE_PLAYER_RADIUS = 9.5;
 const CONE_LENGTH = 28;
 const CONE_HALF_ANGLE = Math.PI / 6; // 30°
-const DEATH_FADE_DURATION_MS = 3800; // 3.8s smooth fade out on death
+const DEATH_FADE_DURATION_MS = 10000; // Keep dead players visible during round
 
 const HEALTH_BAR_W = 24;
 const HEALTH_BAR_H = 3.5;
@@ -238,6 +238,7 @@ function drawBomb(
   mapInfo: MapInfo,
   now: number
 ): void {
+  if (isNaN(cx) || isNaN(cy)) return;
   ctx.save();
 
   // Pulsing Shockwave Alert Ring
@@ -336,6 +337,7 @@ function drawPlayer(
   showVisionCones: boolean,
   now: number
 ): boolean {
+  if (isNaN(cx) || isNaN(cy)) return false;
   const isT = p.team === "T";
   const alive = p.isAlive;
 
@@ -345,11 +347,8 @@ function drawPlayer(
     if (!p.deathTimestamp) {
       p.deathTimestamp = now;
     }
-    const elapsed = now - p.deathTimestamp;
-    if (elapsed >= DEATH_FADE_DURATION_MS) {
-      return false;
-    }
-    opacity = Math.max(0, 1.0 - elapsed / DEATH_FADE_DURATION_MS);
+    // Keep dead players visible with translucent ghost marker (never vanish if still in JSON)
+    opacity = 0.65;
   }
 
   ctx.save();
@@ -605,8 +604,9 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
 
       if (!payload) {
         bombRef.current = null;
+        stateRef.current.clear();
       } else {
-        const mapInfo = getMapInfo(payload.map);
+        const mapInfo = getMapInfo(payload.map || mapId);
         const currentState = stateRef.current;
         const incomingIds = new Set<string>();
         const now = Date.now();
@@ -638,11 +638,13 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         }
 
         // Update ALL players interpolation targets — process every single one
-        for (let i = 0; i < payload.players.length; i++) {
-          const p = payload.players[i];
-          incomingIds.add(p.id);
+        const rawList = Array.isArray(payload.players) ? payload.players : [];
+        for (let i = 0; i < rawList.length; i++) {
+          const p = rawList[i];
+          const playerId = String(p.id || `p_${i}`);
+          incomingIds.add(playerId);
           const { fx, fy } = worldToFraction(p.x, p.y, mapInfo);
-          const existing = currentState.get(p.id);
+          const existing = currentState.get(playerId);
 
           if (existing) {
             // Update death/alive transition
@@ -654,7 +656,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
             existing.wasAlive = p.isAlive;
 
             // Copy all player data fields
-            existing.id = p.id;
+            existing.id = playerId;
             existing.name = p.name;
             existing.team = p.team;
             existing.x = p.x;
@@ -671,6 +673,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
           } else {
             const interp: InterpolatedPlayer = {
               ...p,
+              id: playerId,
               rx: fx,
               ry: fy,
               tx: fx,
@@ -678,17 +681,14 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
               wasAlive: p.isAlive,
               deathTimestamp: !p.isAlive ? now : undefined,
             };
-            currentState.set(p.id, interp);
+            currentState.set(playerId, interp);
           }
         }
 
         // Clean up players no longer in payload
         currentState.forEach((p, id) => {
           if (!incomingIds.has(id)) {
-            if (!p.deathTimestamp) p.deathTimestamp = now;
-            if (now - p.deathTimestamp >= DEATH_FADE_DURATION_MS) {
-              currentState.delete(id);
-            }
+            currentState.delete(id);
           }
         });
       }

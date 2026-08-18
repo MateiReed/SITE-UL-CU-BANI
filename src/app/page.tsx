@@ -9,7 +9,8 @@ import React, {
 } from "react";
 import dynamic from "next/dynamic";
 import { MAPS } from "@/lib/mapData";
-import type { RadarPayload } from "@/lib/radarStore";
+import type { RadarPayload, ExecutorPayload } from "@/lib/radarStore";
+import { transformExecutorPayload } from "@/lib/radarStore";
 
 const RadarCanvas = dynamic(() => import("@/components/RadarCanvas"), {
   ssr: false,
@@ -144,7 +145,7 @@ function generateMockPayload(mapId: string, tick: number): RadarPayload {
   };
 }
 
-const HTTP_POLL_INTERVAL = 120; // 8.3Hz fast polling
+const HTTP_POLL_INTERVAL = 30; // 33Hz real-time ultra-fast polling
 
 export default function Page() {
   const [mounted, setMounted] = useState(false);
@@ -285,8 +286,14 @@ export default function Page() {
 
   // Process incoming telemetry packet
   const handleIncomingPayload = useCallback(
-    (data: RadarPayload) => {
-      if (!data || !data.map || !Array.isArray(data.players)) return;
+    (rawData: unknown) => {
+      if (!rawData || typeof rawData !== "object") return;
+      const rawObj = rawData as Record<string, unknown>;
+      if (!rawObj.map || !Array.isArray(rawObj.players)) return;
+
+      // Transform & normalize to guarantee unique IDs and coordinate structure for all players
+      const data = transformExecutorPayload(rawObj as unknown as ExecutorPayload);
+
       const now = Date.now();
       if (data.timestamp) {
         setLatency(Math.max(0, now - data.timestamp));
