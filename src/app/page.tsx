@@ -91,13 +91,19 @@ function generateMockPayload(mapId: string, tick: number): RadarPayload {
 
   const t = tick * 0.02;
 
+  // ZywOo is carrying the bomb
+  const carrierX = xMin + (tPlayers[0].baseX + Math.sin(t) * 0.07) * xRange;
+  const carrierY = yMin + (tPlayers[0].baseY + Math.cos(t) * 0.07) * yRange;
+
   return {
     map: mapId,
     timestamp: Date.now(),
     bomb: {
-      x: xMin + (0.42 + Math.sin(t * 0.3) * 0.04) * xRange,
-      y: yMin + (0.48 + Math.cos(t * 0.3) * 0.04) * yRange,
+      x: carrierX,
+      y: carrierY,
       z: currentMap.zMid,
+      isCarried: true,
+      carrierId: "76561198000000001",
     },
     players: [
       ...tPlayers.map((p, i) => ({
@@ -111,6 +117,7 @@ function generateMockPayload(mapId: string, tick: number): RadarPayload {
         health: Math.max(0, 100 - ((tick + i * 17) % 75)),
         armor: Math.max(0, 100 - ((tick + i * 11 + 10) % 110)),
         isAlive: (tick + i * 31) % 120 < 105,
+        hasBomb: i === 0, // ZywOo has C4
       })),
       ...ctPlayers.map((p, i) => ({
         id: p.id,
@@ -123,7 +130,59 @@ function generateMockPayload(mapId: string, tick: number): RadarPayload {
         health: Math.max(0, 100 - ((tick + i * 23 + 40) % 75)),
         armor: Math.max(0, 100 - ((tick + i * 13 + 20) % 110)),
         isAlive: (tick + i * 41 + 15) % 120 < 110,
+        hasBomb: false,
       })),
+    ],
+    smokes: [
+      {
+        id: "smoke_0",
+        x: xMin + 0.45 * xRange,
+        y: yMin + 0.48 * yRange,
+        z: currentMap.zMid,
+      },
+      {
+        id: "smoke_1",
+        x: xMin + 0.58 * xRange,
+        y: yMin + 0.38 * yRange,
+        z: currentMap.zMid,
+      },
+    ],
+    molotovs: [
+      {
+        id: "molo_0",
+        x: xMin + 0.38 * xRange,
+        y: yMin + 0.59 * yRange,
+        z: currentMap.zMid,
+      },
+      {
+        id: "molo_1",
+        x: xMin + 0.68 * xRange,
+        y: yMin + 0.52 * yRange,
+        z: currentMap.zMid,
+      },
+    ],
+    guns: [
+      {
+        id: "gun_0_AK-47",
+        name: "AK-47",
+        x: xMin + 0.41 * xRange,
+        y: yMin + 0.44 * yRange,
+        z: currentMap.zMid,
+      },
+      {
+        id: "gun_1_AWP",
+        name: "AWP",
+        x: xMin + 0.62 * xRange,
+        y: yMin + 0.46 * yRange,
+        z: currentMap.zMid,
+      },
+      {
+        id: "gun_2_M4A1-S",
+        name: "M4A1-S",
+        x: xMin + 0.54 * xRange,
+        y: yMin + 0.61 * yRange,
+        z: currentMap.zMid,
+      },
     ],
   };
 }
@@ -146,7 +205,7 @@ export default function Page() {
 
   // Inspector & UI Controls
   const [activeTab, setActiveTab] = useState<
-    "players" | "raw" | "api" | "shortcuts"
+    "players" | "utils" | "raw" | "api" | "shortcuts"
   >("players");
   const [packetCount, setPacketCount] = useState(0);
   const [lastPacketTime, setLastPacketTime] = useState<string>("--");
@@ -163,6 +222,9 @@ export default function Page() {
   const [showGrid, setShowGrid] = useState(true);
   const [showNames, setShowNames] = useState(true);
   const [showVisionCones, setShowVisionCones] = useState(true);
+  const [showSmokes, setShowSmokes] = useState(true);
+  const [showMolotovs, setShowMolotovs] = useState(true);
+  const [showGuns, setShowGuns] = useState(true);
   const [radarZoom, setRadarZoom] = useState(1.0);
 
   const radarContainerRef = useRef<HTMLDivElement>(null);
@@ -249,6 +311,15 @@ export default function Page() {
       } else if (key === "v") {
         e.preventDefault();
         setShowVisionCones((v) => !v);
+      } else if (key === "s") {
+        e.preventDefault();
+        setShowSmokes((v) => !v);
+      } else if (key === "k") {
+        e.preventDefault();
+        setShowMolotovs((v) => !v);
+      } else if (key === "u") {
+        e.preventDefault();
+        setShowGuns((v) => !v);
       } else if (key === "m") {
         e.preventDefault();
         setAudioEnabled((v) => {
@@ -500,6 +571,11 @@ export default function Page() {
       ctPlayers.reduce((acc, p) => acc + (p.isAlive ? p.health : 0), 0),
     [ctPlayers]
   );
+
+  const bombCarrier = useMemo(() => {
+    if (!payload?.bomb?.carrierId) return null;
+    return payload.players.find((p) => p.id === payload.bomb?.carrierId) ?? null;
+  }, [payload]);
 
   const filteredPlayers = useMemo(() => {
     if (!payload?.players) return [];
@@ -826,6 +902,25 @@ export default function Page() {
                 </div>
               </div>
             </div>
+
+            {/* Bomb Status Indicator */}
+            <div className="mt-2.5 p-2 rounded-xl bg-[#0e1424] border border-white/[0.06] text-xs font-mono flex items-center justify-between">
+              <span className="text-slate-400 flex items-center gap-1.5">
+                <span>💣 C4 BOMB:</span>
+              </span>
+              {bombCarrier ? (
+                <span className="text-amber-400 font-bold flex items-center gap-1">
+                  <span>Carried by</span>
+                  <span className="text-white underline">{bombCarrier.name}</span>
+                </span>
+              ) : payload?.bomb ? (
+                <span className="text-rose-400 font-bold animate-pulse">
+                  ON GROUND / PLANTED
+                </span>
+              ) : (
+                <span className="text-slate-500">None</span>
+              )}
+            </div>
           </div>
 
           {/* Viewport Preferences */}
@@ -850,6 +945,36 @@ export default function Page() {
                   type="checkbox"
                   checked={showVisionCones}
                   onChange={(e) => setShowVisionCones(e.target.checked)}
+                  className="rounded border-slate-700 text-amber-500 focus:ring-0"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-2 rounded-lg bg-[#0e1424] hover:bg-[#12192e] border border-white/[0.06] cursor-pointer">
+                <span className="text-slate-300">Active Smokes (S)</span>
+                <input
+                  type="checkbox"
+                  checked={showSmokes}
+                  onChange={(e) => setShowSmokes(e.target.checked)}
+                  className="rounded border-slate-700 text-amber-500 focus:ring-0"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-2 rounded-lg bg-[#0e1424] hover:bg-[#12192e] border border-white/[0.06] cursor-pointer">
+                <span className="text-slate-300">Active Molotovs (K)</span>
+                <input
+                  type="checkbox"
+                  checked={showMolotovs}
+                  onChange={(e) => setShowMolotovs(e.target.checked)}
+                  className="rounded border-slate-700 text-amber-500 focus:ring-0"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-2 rounded-lg bg-[#0e1424] hover:bg-[#12192e] border border-white/[0.06] cursor-pointer">
+                <span className="text-slate-300">Dropped Guns (U)</span>
+                <input
+                  type="checkbox"
+                  checked={showGuns}
+                  onChange={(e) => setShowGuns(e.target.checked)}
                   className="rounded border-slate-700 text-amber-500 focus:ring-0"
                 />
               </label>
@@ -908,8 +1033,9 @@ export default function Page() {
               </div>
               <div className="bg-[#0e1424] border border-white/[0.08] rounded-xl p-2.5 space-y-1.5 text-xs font-mono">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-white text-sm">
-                    {selectedPlayer.name}
+                  <span className="font-bold text-white text-sm flex items-center gap-1.5">
+                    {selectedPlayer.hasBomb && <span>💣</span>}
+                    <span>{selectedPlayer.name}</span>
                   </span>
                   <span
                     className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
@@ -971,6 +1097,9 @@ export default function Page() {
               showGrid={showGrid}
               showNames={showNames}
               showVisionCones={showVisionCones}
+              showSmokes={showSmokes}
+              showMolotovs={showMolotovs}
+              showGuns={showGuns}
               radarZoom={radarZoom}
             />
 
@@ -986,6 +1115,21 @@ export default function Page() {
                 </span>
                 <span className="text-[10px] font-mono text-slate-400">
                   ({currentMap.id})
+                </span>
+              </div>
+
+              {/* Counts Badge */}
+              <div className="hidden sm:flex items-center gap-2 bg-[#0b0f19]/90 backdrop-blur-md border border-white/[0.08] rounded-xl px-3 py-1.5 text-xs font-mono shadow-2xl">
+                <span className="text-slate-300">
+                  💨 {payload?.smokes?.length ?? 0}
+                </span>
+                <span className="text-slate-600">•</span>
+                <span className="text-amber-400">
+                  🔥 {payload?.molotovs?.length ?? 0}
+                </span>
+                <span className="text-slate-600">•</span>
+                <span className="text-sky-400">
+                  🔫 {payload?.guns?.length ?? 0}
                 </span>
               </div>
 
@@ -1081,6 +1225,12 @@ export default function Page() {
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-bold">
                     {payload?.players.length ?? 0} PLAYERS
                   </span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-sky-500/15 text-sky-400 border border-sky-500/30 font-bold">
+                    {(payload?.smokes?.length ?? 0) + (payload?.molotovs?.length ?? 0)} UTILS
+                  </span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 font-bold">
+                    {payload?.guns?.length ?? 0} GUNS
+                  </span>
                   <span className="text-[10px] font-mono text-slate-500">
                     Sync: {timeAgo}
                   </span>
@@ -1114,7 +1264,17 @@ export default function Page() {
                         : "text-slate-400 hover:text-slate-200"
                     }`}
                   >
-                    PLAYERS ROSTER
+                    ROSTER ({payload?.players.length ?? 0})
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("utils")}
+                    className={`px-3 py-1 rounded-lg text-xs font-mono transition-all font-bold ${
+                      activeTab === "utils"
+                        ? "bg-[#141b30] text-white border border-white/[0.15] shadow-sm"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    UTILS & WEAPONS ({(payload?.guns?.length ?? 0) + (payload?.smokes?.length ?? 0) + (payload?.molotovs?.length ?? 0)})
                   </button>
                   <button
                     onClick={() => setActiveTab("raw")}
@@ -1182,6 +1342,11 @@ export default function Page() {
                                 {p.id}
                               </td>
                               <td className="py-1.5 px-2 font-bold text-white flex items-center gap-1.5">
+                                {p.hasBomb && (
+                                  <span className="text-[10px] px-1 bg-red-500/20 text-red-300 rounded border border-red-500/40 font-black" title="Carrying C4 Bomb">
+                                    💣 C4
+                                  </span>
+                                )}
                                 <span>{p.name}</span>
                                 {isFocused && (
                                   <span className="text-[9px] px-1 bg-amber-500/20 text-amber-300 rounded border border-amber-500/30 font-bold">
@@ -1243,13 +1408,109 @@ export default function Page() {
                             colSpan={8}
                             className="py-8 text-center text-slate-500 font-mono"
                           >
-                            Niciun pachet primit încă de la executor. Trimiteti
-                            date pentru a vizualiza.
+                            Niciun jucător înregistrat în acest moment.
                           </td>
                         </tr>
                       )}
                     </tbody>
                   </table>
+                )}
+
+                {activeTab === "utils" && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-1">
+                    {/* Active Smokes Card */}
+                    <div className="bg-[#0e1424] border border-white/[0.06] rounded-xl p-3 space-y-2">
+                      <div className="flex items-center justify-between border-b border-white/[0.06] pb-1.5">
+                        <span className="text-slate-300 font-bold flex items-center gap-1.5">
+                          <span>💨 ACTIVE SMOKES</span>
+                        </span>
+                        <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">
+                          {payload?.smokes?.length ?? 0}
+                        </span>
+                      </div>
+                      <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                        {payload?.smokes && payload.smokes.length > 0 ? (
+                          payload.smokes.map((s, idx) => (
+                            <div
+                              key={s.id || idx}
+                              className="flex items-center justify-between text-[11px] bg-[#07090e] p-1.5 rounded border border-white/[0.04]"
+                            >
+                              <span className="text-slate-300 font-bold">Smoke #{idx + 1}</span>
+                              <span className="text-slate-400">
+                                ({s.x.toFixed(1)}, {s.y.toFixed(1)})
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-slate-500 text-center py-3 text-[11px]">
+                            No active smokes
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Active Molotovs Card */}
+                    <div className="bg-[#0e1424] border border-white/[0.06] rounded-xl p-3 space-y-2">
+                      <div className="flex items-center justify-between border-b border-white/[0.06] pb-1.5">
+                        <span className="text-amber-300 font-bold flex items-center gap-1.5">
+                          <span>🔥 ACTIVE MOLOTOVS</span>
+                        </span>
+                        <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded">
+                          {payload?.molotovs?.length ?? 0}
+                        </span>
+                      </div>
+                      <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                        {payload?.molotovs && payload.molotovs.length > 0 ? (
+                          payload.molotovs.map((m, idx) => (
+                            <div
+                              key={m.id || idx}
+                              className="flex items-center justify-between text-[11px] bg-[#07090e] p-1.5 rounded border border-amber-500/20"
+                            >
+                              <span className="text-amber-400 font-bold">Molotov #{idx + 1}</span>
+                              <span className="text-slate-400">
+                                ({m.x.toFixed(1)}, {m.y.toFixed(1)})
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-slate-500 text-center py-3 text-[11px]">
+                            No active molotovs
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Dropped Weapons Card */}
+                    <div className="bg-[#0e1424] border border-white/[0.06] rounded-xl p-3 space-y-2">
+                      <div className="flex items-center justify-between border-b border-white/[0.06] pb-1.5">
+                        <span className="text-sky-300 font-bold flex items-center gap-1.5">
+                          <span>🔫 DROPPED GUNS</span>
+                        </span>
+                        <span className="text-[10px] bg-sky-500/20 text-sky-300 px-1.5 py-0.5 rounded">
+                          {payload?.guns?.length ?? 0}
+                        </span>
+                      </div>
+                      <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                        {payload?.guns && payload.guns.length > 0 ? (
+                          payload.guns.map((g, idx) => (
+                            <div
+                              key={g.id || idx}
+                              className="flex items-center justify-between text-[11px] bg-[#07090e] p-1.5 rounded border border-sky-500/20"
+                            >
+                              <span className="text-sky-300 font-bold">{g.name}</span>
+                              <span className="text-slate-400">
+                                ({g.x.toFixed(1)}, {g.y.toFixed(1)})
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-slate-500 text-center py-3 text-[11px]">
+                            No dropped weapons
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 {activeTab === "raw" && (
@@ -1320,7 +1581,7 @@ export default function Page() {
                     <div className="p-3 bg-[#0e1424] rounded-xl border border-white/[0.08] space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-sky-300 font-bold flex items-center gap-1.5">
-                          <span>🌐 Mod HTTP POST (Vercel & Serverless):</span>
+                          <span>🌐 Mod HTTP POST (Format Nou cu Guns & Utils):</span>
                         </span>
                         <button
                           onClick={() =>
@@ -1329,7 +1590,7 @@ export default function Page() {
                                 typeof window !== "undefined"
                                   ? window.location.origin
                                   : "http://localhost:3000"
-                              }/api/radar -H "Content-Type: application/json" -d '{"map":"${selectedMap}","players":[{"steamid":"76561198000000000","name":"Player1","team":"CT","health":100,"armor":100,"alive":true,"pos":{"x":-1420.5,"y":623.1,"z":-120.0},"yaw":88.5}],"bomb":{"pos":{"x":240.2,"y":-1100.8,"z":-64.0}}}'`
+                              }/api/radar -H "Content-Type: application/json" -d '{"map":"${selectedMap}","players":[{"steamid":"76561198000000000","name":"Player1","team":"CT","health":100,"armor":100,"alive":true,"pos":{"x":-1420.5,"y":623.1,"z":-120.0},"yaw":88.5}],"bomb":{"pos":{"x":240.2,"y":-1100.8,"z":-64.0}},"optional":{"utils":{"smokes":[{"pos":{"x":-1200.5,"y":450.2,"z":-118.0}}],"molotovs":[{"pos":{"x":-1350.0,"y":510.0,"z":-120.0}}]},"gun":[{"id":"AK-47","pos":{"x":240.2,"y":-1100.8,"z":-64.0}}]}}'`
                             )
                           }
                           className="px-2 py-0.5 bg-[#1a233d] border border-white/[0.1] rounded text-[11px] text-slate-200 font-bold"
@@ -1356,14 +1617,40 @@ export default function Page() {
       "alive": true,
       "pos": { "x": -1420.5, "y": 623.1, "z": -120.0 },
       "yaw": 88.5
+    },
+    {
+      "steamid": "76561198000000001",
+      "name": "Player2",
+      "team": "T",
+      "health": 65,
+      "armor": 0,
+      "alive": true,
+      "pos": { "x": 240.2, "y": -1100.8, "z": -64.0 },
+      "yaw": 270.0
     }
   ],
   "bomb": {
-    "pos": {
-      "x": 240.2,
-      "y": -1100.8,
-      "z": -64.0
-    }
+    "pos": { "x": 240.2, "y": -1100.8, "z": -64.0 }
+  },
+  "optional": {
+    "utils": {
+      "smokes": [
+        { "pos": { "x": -1200.5, "y": 450.2, "z": -118.0 } }
+      ],
+      "molotovs": [
+        { "pos": { "x": -1350.0, "y": 510.0, "z": -120.0 } }
+      ]
+    },
+    "gun": [
+      {
+        "id": "AK-47",
+        "pos": { "x": 240.2, "y": -1100.8, "z": -64.0 }
+      },
+      {
+        "id": "AWP",
+        "pos": { "x": 242.2, "y": -1105.8, "z": -63.0 }
+      }
+    ]
   }
 }'`}
                       </pre>
@@ -1395,6 +1682,24 @@ export default function Page() {
                       <span className="text-slate-300">Vision FOV Cones</span>
                       <kbd className="px-2 py-1 bg-slate-800 rounded border border-slate-700 text-amber-400 font-bold">
                         V
+                      </kbd>
+                    </div>
+                    <div className="bg-[#0e1424] border border-white/[0.06] rounded-xl p-2.5 flex items-center justify-between">
+                      <span className="text-slate-300">Toggle Smokes</span>
+                      <kbd className="px-2 py-1 bg-slate-800 rounded border border-slate-700 text-amber-400 font-bold">
+                        S
+                      </kbd>
+                    </div>
+                    <div className="bg-[#0e1424] border border-white/[0.06] rounded-xl p-2.5 flex items-center justify-between">
+                      <span className="text-slate-300">Toggle Molotovs</span>
+                      <kbd className="px-2 py-1 bg-slate-800 rounded border border-slate-700 text-amber-400 font-bold">
+                        K
+                      </kbd>
+                    </div>
+                    <div className="bg-[#0e1424] border border-white/[0.06] rounded-xl p-2.5 flex items-center justify-between">
+                      <span className="text-slate-300">Toggle Dropped Guns</span>
+                      <kbd className="px-2 py-1 bg-slate-800 rounded border border-slate-700 text-amber-400 font-bold">
+                        U
                       </kbd>
                     </div>
                     <div className="bg-[#0e1424] border border-white/[0.06] rounded-xl p-2.5 flex items-center justify-between">

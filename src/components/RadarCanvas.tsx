@@ -9,7 +9,14 @@ import React, {
 } from "react";
 import { worldToFraction, getMapInfo, MAPS, normalizeMapId } from "@/lib/mapData";
 import type { MapInfo } from "@/lib/mapData";
-import type { RadarPayload, PlayerData, BombData } from "@/lib/radarStore";
+import type {
+  RadarPayload,
+  PlayerData,
+  BombData,
+  SmokeData,
+  MolotovData,
+  GunData,
+} from "@/lib/radarStore";
 
 interface InterpolatedPlayer extends PlayerData {
   rx: number;
@@ -27,6 +34,19 @@ interface InterpolatedBomb extends BombData {
   ty: number;
 }
 
+interface InterpolatedUtility {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  rx: number;
+  ry: number;
+  tx: number;
+  ty: number;
+  name?: string;
+  bornTime: number;
+}
+
 export interface RadarCanvasProps {
   mapId: string;
   payload: RadarPayload | null;
@@ -34,6 +54,9 @@ export interface RadarCanvasProps {
   showGrid?: boolean;
   showNames?: boolean;
   showVisionCones?: boolean;
+  showSmokes?: boolean;
+  showMolotovs?: boolean;
+  showGuns?: boolean;
   radarZoom?: number;
 }
 
@@ -46,7 +69,6 @@ export interface RadarCanvasHandle {
 const BASE_PLAYER_RADIUS = 9.5;
 const CONE_LENGTH = 28;
 const CONE_HALF_ANGLE = Math.PI / 6; // 30°
-const DEATH_FADE_DURATION_MS = 10000; // Keep dead players visible during round
 
 const HEALTH_BAR_W = 24;
 const HEALTH_BAR_H = 3.5;
@@ -91,6 +113,23 @@ function lerp(a: number, b: number, t: number): number {
 
 function degToRad(deg: number): number {
   return (deg * Math.PI) / 180;
+}
+
+function getGunColor(name: string): { bg: string; border: string; text: string } {
+  const upper = name.toUpperCase();
+  if (upper.includes("AWP") || upper.includes("SSG") || upper.includes("SCAR") || upper.includes("G3SG1")) {
+    return { bg: "rgba(168, 85, 247, 0.2)", border: "#c084fc", text: "#e9d5ff" }; // Snipers (Purple)
+  }
+  if (upper.includes("AK") || upper.includes("M4") || upper.includes("GALIL") || upper.includes("FAMAS") || upper.includes("AUG") || upper.includes("SG")) {
+    return { bg: "rgba(245, 158, 11, 0.2)", border: "#fb923c", text: "#ffedd5" }; // Rifles (Amber/Orange)
+  }
+  if (upper.includes("DEAGLE") || upper.includes("DESERT") || upper.includes("USP") || upper.includes("GLOCK") || upper.includes("P250") || upper.includes("FIVE") || upper.includes("CZ") || upper.includes("REVOLVER")) {
+    return { bg: "rgba(56, 189, 248, 0.2)", border: "#38bdf8", text: "#e0f2fe" }; // Pistols (Cyan)
+  }
+  if (upper.includes("MP9") || upper.includes("MAC") || upper.includes("MP7") || upper.includes("MP5") || upper.includes("UMP") || upper.includes("P90") || upper.includes("BIZON")) {
+    return { bg: "rgba(52, 211, 153, 0.2)", border: "#34d399", text: "#d1fae5" }; // SMGs (Green)
+  }
+  return { bg: "rgba(148, 163, 184, 0.15)", border: "#94a3b8", text: "#f1f5f9" };
 }
 
 function drawMapBackground(
@@ -228,7 +267,187 @@ function drawMapBackground(
   ctx.restore();
 }
 
-// ─── Draw C4 Bomb Marker ───────────────────────────────────────────────────
+// ─── Draw Smokes ─────────────────────────────────────────────────────────────
+function drawSmoke(
+  ctx: CanvasRenderingContext2D,
+  smoke: InterpolatedUtility,
+  cx: number,
+  cy: number,
+  mapInfo: MapInfo,
+  size: number,
+  now: number
+): void {
+  if (isNaN(cx) || isNaN(cy)) return;
+  ctx.save();
+
+  // Calculate actual smoke radius from world scale (CS2 smoke radius ~ 144 world units)
+  const span = mapInfo.scale * 1024;
+  const worldRadius = 148;
+  const pixelRadius = Math.max(16, (worldRadius / span) * size);
+
+  // Soft breathing animation
+  const pulse = Math.sin(now * 0.003 + smoke.x * 0.01) * 0.05 + 1; // 0.95..1.05
+  const rad = pixelRadius * pulse;
+
+  // Multi-layered radial smoke cloud
+  const smokeGrad = ctx.createRadialGradient(
+    cx,
+    cy,
+    rad * 0.15,
+    cx,
+    cy,
+    rad
+  );
+  smokeGrad.addColorStop(0, "rgba(220, 230, 245, 0.72)");
+  smokeGrad.addColorStop(0.45, "rgba(160, 175, 195, 0.55)");
+  smokeGrad.addColorStop(0.8, "rgba(100, 116, 139, 0.35)");
+  smokeGrad.addColorStop(1, "rgba(71, 85, 105, 0.0)");
+
+  ctx.fillStyle = smokeGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Subtle outer boundary ring
+  ctx.strokeStyle = "rgba(203, 213, 225, 0.4)";
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, rad * 0.96, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Tactical Smoke Icon / Badge at center
+  ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+  ctx.strokeStyle = "rgba(203, 213, 225, 0.6)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 7.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#e2e8f0";
+  ctx.font = "bold 8px ui-monospace, SFMono-Regular, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("💨", cx, cy + 0.5);
+
+  ctx.restore();
+}
+
+// ─── Draw Molotovs ───────────────────────────────────────────────────────────
+function drawMolotov(
+  ctx: CanvasRenderingContext2D,
+  molo: InterpolatedUtility,
+  cx: number,
+  cy: number,
+  mapInfo: MapInfo,
+  size: number,
+  now: number
+): void {
+  if (isNaN(cx) || isNaN(cy)) return;
+  ctx.save();
+
+  // Calculate actual molotov radius from world scale (CS2 fire radius ~ 155 world units)
+  const span = mapInfo.scale * 1024;
+  const worldRadius = 155;
+  const pixelRadius = Math.max(16, (worldRadius / span) * size);
+
+  // Dynamic fiery flickering animation
+  const flicker = Math.sin(now * 0.008 + molo.x * 0.02) * 0.08 + 1;
+  const rad = pixelRadius * flicker;
+
+  // Multi-layered fiery radial gradient
+  const fireGrad = ctx.createRadialGradient(
+    cx,
+    cy,
+    rad * 0.15,
+    cx,
+    cy,
+    rad
+  );
+  fireGrad.addColorStop(0, "rgba(254, 240, 138, 0.8)");
+  fireGrad.addColorStop(0.35, "rgba(249, 115, 22, 0.65)");
+  fireGrad.addColorStop(0.75, "rgba(220, 38, 38, 0.4)");
+  fireGrad.addColorStop(1, "rgba(185, 28, 28, 0.0)");
+
+  ctx.fillStyle = fireGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Pulsing flame shockwave ring
+  const pulse = (Math.sin(now * 0.006 + molo.y * 0.01) + 1) / 2;
+  ctx.strokeStyle = `rgba(249, 115, 22, ${0.4 + pulse * 0.4})`;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, rad * (0.85 + pulse * 0.15), 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Tactical Flame Icon / Badge at center
+  ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+  ctx.strokeStyle = "rgba(249, 115, 22, 0.9)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 7.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#fde047";
+  ctx.font = "bold 8px ui-monospace, SFMono-Regular, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("🔥", cx, cy + 0.5);
+
+  ctx.restore();
+}
+
+// ─── Draw Dropped Weapons ────────────────────────────────────────────────────
+function drawDroppedGun(
+  ctx: CanvasRenderingContext2D,
+  gun: InterpolatedUtility,
+  cx: number,
+  cy: number
+): void {
+  if (isNaN(cx) || isNaN(cy)) return;
+  ctx.save();
+
+  const name = gun.name || "Gun";
+  const styling = getGunColor(name);
+
+  ctx.font = "bold 8.5px ui-monospace, SFMono-Regular, Menlo, monospace";
+  const metrics = ctx.measureText(name);
+  const badgeW = metrics.width + 12;
+  const badgeH = 13;
+
+  const bx = cx - badgeW / 2;
+  const by = cy - badgeH / 2;
+
+  // Background box with weapon category theme
+  ctx.fillStyle = "rgba(8, 12, 22, 0.92)";
+  ctx.strokeStyle = styling.border;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.roundRect(bx, by, badgeW, badgeH, 3.5);
+  ctx.fill();
+  ctx.stroke();
+
+  // Small weapon dot / category indicator on left
+  ctx.fillStyle = styling.border;
+  ctx.beginPath();
+  ctx.arc(bx + 4.5, cy, 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Weapon Name Text
+  ctx.fillStyle = styling.text;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(name, bx + 9, cy + 0.5);
+
+  ctx.restore();
+}
+
+// ─── Draw C4 Bomb Marker (Dropped on Ground) ──────────────────────────────────
 function drawBomb(
   ctx: CanvasRenderingContext2D,
   bomb: InterpolatedBomb,
@@ -339,6 +558,7 @@ function drawPlayer(
   if (isNaN(cx) || isNaN(cy)) return false;
   const isT = p.team === "T";
   const alive = p.isAlive;
+  const hasBomb = Boolean(p.hasBomb);
 
   let opacity = 1.0;
 
@@ -346,7 +566,7 @@ function drawPlayer(
     if (!p.deathTimestamp) {
       p.deathTimestamp = now;
     }
-    // Keep dead players visible with translucent ghost marker (never vanish if still in JSON)
+    // Keep dead players visible with translucent ghost marker
     opacity = 0.65;
   }
 
@@ -396,8 +616,12 @@ function drawPlayer(
     : COLOR_CT_DEAD;
 
   if (alive) {
-    ctx.shadowColor = isT ? COLOR_T_GLOW : COLOR_CT_GLOW;
-    ctx.shadowBlur = 12;
+    ctx.shadowColor = hasBomb
+      ? "rgba(239, 68, 68, 0.9)"
+      : isT
+      ? COLOR_T_GLOW
+      : COLOR_CT_GLOW;
+    ctx.shadowBlur = hasBomb ? 16 : 12;
   }
 
   ctx.beginPath();
@@ -406,8 +630,8 @@ function drawPlayer(
   ctx.fill();
   ctx.shadowBlur = 0;
 
-  ctx.strokeStyle = alive ? "#ffffff" : "rgba(255,255,255,0.4)";
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = hasBomb ? "#ef4444" : alive ? "#ffffff" : "rgba(255,255,255,0.4)";
+  ctx.lineWidth = hasBomb ? 2.5 : 2;
   ctx.stroke();
 
   if (alive) {
@@ -416,6 +640,32 @@ function drawPlayer(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(p.team, cx, cy);
+  }
+
+  // ── C4 Bomb Carrier Badge attached to Player ─────────────────────
+  if (alive && hasBomb) {
+    const badgeX = cx + BASE_PLAYER_RADIUS + 2;
+    const badgeY = cy - BASE_PLAYER_RADIUS - 2;
+    
+    // Pulsing C4 badge glow
+    const bombPulse = (Math.sin(now * 0.008) + 1) / 2;
+    ctx.fillStyle = "#ef4444";
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.2;
+    ctx.shadowColor = "rgba(239, 68, 68, 0.9)";
+    ctx.shadowBlur = 8 + bombPulse * 6;
+
+    ctx.beginPath();
+    ctx.roundRect(badgeX, badgeY - 6, 17, 12, 3);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "900 8px ui-monospace, SFMono-Regular, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("C4", badgeX + 8.5, badgeY);
   }
 
   // ── Death Circle with X ──────────────────────────────────────────
@@ -498,7 +748,7 @@ function drawPlayer(
   const zThreshold = 75;
   if (alive && Math.abs(zDelta) > zThreshold) {
     const isUp = zDelta > 0;
-    const ax = cx + BASE_PLAYER_RADIUS + 4.5;
+    const ax = cx + BASE_PLAYER_RADIUS + (hasBomb ? 22 : 4.5);
     const ay = cy;
     ctx.fillStyle = "#ffffff";
     ctx.beginPath();
@@ -523,11 +773,14 @@ function drawPlayer(
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
 
-    const txt = p.name ? p.name.slice(0, 14) : "Player";
+    const baseTxt = p.name ? p.name.slice(0, 14) : "Player";
+    const txt = hasBomb ? `💣 ${baseTxt}` : baseTxt;
     const metrics = ctx.measureText(txt);
 
     ctx.fillStyle = "rgba(4, 7, 18, 0.88)";
-    ctx.strokeStyle = isT
+    ctx.strokeStyle = hasBomb
+      ? "rgba(239, 68, 68, 0.6)"
+      : isT
       ? "rgba(245, 158, 11, 0.4)"
       : "rgba(56, 189, 248, 0.4)";
     ctx.lineWidth = 1;
@@ -542,7 +795,7 @@ function drawPlayer(
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = alive ? "#f8fafc" : "rgba(203, 213, 225, 0.5)";
+    ctx.fillStyle = alive ? (hasBomb ? "#fca5a5" : "#f8fafc") : "rgba(203, 213, 225, 0.5)";
     ctx.fillText(txt, cx, labelY);
   }
 
@@ -559,6 +812,9 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       showGrid = true,
       showNames = true,
       showVisionCones = true,
+      showSmokes = true,
+      showMolotovs = true,
+      showGuns = true,
       radarZoom = 1.0,
     },
     ref
@@ -566,6 +822,10 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const stateRef = useRef<Map<string, InterpolatedPlayer>>(new Map());
     const bombRef = useRef<InterpolatedBomb | null>(null);
+    const smokesRef = useRef<Map<string, InterpolatedUtility>>(new Map());
+    const molotovsRef = useRef<Map<string, InterpolatedUtility>>(new Map());
+    const gunsRef = useRef<Map<string, InterpolatedUtility>>(new Map());
+
     const rafRef = useRef<number>(0);
     const fpsRef = useRef({ frames: 0, lastTime: performance.now() });
 
@@ -593,20 +853,19 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       panRef.current = { x: 0, y: 0 };
     }, [mapId]);
 
-    // Active canonical map ID
-    const activeMap = normalizeMapId(payload?.map || mapId);
-
     // Track the last processed payload to avoid re-processing
     const lastPayloadRef = useRef<RadarPayload | null>(null);
 
-    // Synchronous payload processing — runs inline every render,
-    // NOT inside useEffect, so React batching can never skip players.
+    // Synchronous payload processing — runs inline every render
     if (payload !== lastPayloadRef.current) {
       lastPayloadRef.current = payload;
 
       if (!payload) {
         bombRef.current = null;
         stateRef.current.clear();
+        smokesRef.current.clear();
+        molotovsRef.current.clear();
+        gunsRef.current.clear();
       } else {
         const targetMap = normalizeMapId(payload.map || mapId);
         const mapInfo = getMapInfo(targetMap);
@@ -614,7 +873,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         const incomingIds = new Set<string>();
         const now = Date.now();
 
-        // Update Bomb interpolation target
+        // 1. Update Bomb interpolation target
         if (payload.bomb) {
           const { fx, fy } = worldToFraction(
             payload.bomb.x,
@@ -627,6 +886,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
             bombRef.current.x = payload.bomb.x;
             bombRef.current.y = payload.bomb.y;
             bombRef.current.z = payload.bomb.z;
+            bombRef.current.isCarried = payload.bomb.isCarried;
+            bombRef.current.carrierId = payload.bomb.carrierId;
           } else {
             bombRef.current = {
               ...payload.bomb,
@@ -640,7 +901,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
           bombRef.current = null;
         }
 
-        // Update ALL players interpolation targets — process every single one
+        // 2. Update ALL players interpolation targets
         const rawList = Array.isArray(payload.players) ? payload.players : [];
         for (let i = 0; i < rawList.length; i++) {
           const p = rawList[i];
@@ -650,7 +911,6 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
           const existing = currentState.get(playerId);
 
           if (existing) {
-            // Update death/alive transition
             if (existing.wasAlive && !p.isAlive) {
               existing.deathTimestamp = now;
             } else if (p.isAlive) {
@@ -658,7 +918,6 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
             }
             existing.wasAlive = p.isAlive;
 
-            // Copy all player data fields
             existing.id = playerId;
             existing.name = p.name;
             existing.team = p.team;
@@ -669,8 +928,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
             existing.health = p.health;
             existing.armor = p.armor;
             existing.isAlive = p.isAlive;
+            existing.hasBomb = p.hasBomb;
 
-            // Set interpolation targets
             existing.tx = fx;
             existing.ty = fy;
           } else {
@@ -693,6 +952,107 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
           if (!incomingIds.has(id)) {
             currentState.delete(id);
           }
+        });
+
+        // 3. Update Smokes
+        const incomingSmokeIds = new Set<string>();
+        const rawSmokes = Array.isArray(payload.smokes) ? payload.smokes : [];
+        for (let i = 0; i < rawSmokes.length; i++) {
+          const s = rawSmokes[i];
+          const sId = s.id || `smoke_${i}`;
+          incomingSmokeIds.add(sId);
+          const { fx, fy } = worldToFraction(s.x, s.y, mapInfo);
+          const existing = smokesRef.current.get(sId);
+          if (existing) {
+            existing.tx = fx;
+            existing.ty = fy;
+            existing.x = s.x;
+            existing.y = s.y;
+            existing.z = s.z;
+          } else {
+            smokesRef.current.set(sId, {
+              id: sId,
+              x: s.x,
+              y: s.y,
+              z: s.z,
+              rx: fx,
+              ry: fy,
+              tx: fx,
+              ty: fy,
+              bornTime: now,
+            });
+          }
+        }
+        smokesRef.current.forEach((_, id) => {
+          if (!incomingSmokeIds.has(id)) smokesRef.current.delete(id);
+        });
+
+        // 4. Update Molotovs
+        const incomingMoloIds = new Set<string>();
+        const rawMolos = Array.isArray(payload.molotovs) ? payload.molotovs : [];
+        for (let i = 0; i < rawMolos.length; i++) {
+          const m = rawMolos[i];
+          const mId = m.id || `molo_${i}`;
+          incomingMoloIds.add(mId);
+          const { fx, fy } = worldToFraction(m.x, m.y, mapInfo);
+          const existing = molotovsRef.current.get(mId);
+          if (existing) {
+            existing.tx = fx;
+            existing.ty = fy;
+            existing.x = m.x;
+            existing.y = m.y;
+            existing.z = m.z;
+          } else {
+            molotovsRef.current.set(mId, {
+              id: mId,
+              x: m.x,
+              y: m.y,
+              z: m.z,
+              rx: fx,
+              ry: fy,
+              tx: fx,
+              ty: fy,
+              bornTime: now,
+            });
+          }
+        }
+        molotovsRef.current.forEach((_, id) => {
+          if (!incomingMoloIds.has(id)) molotovsRef.current.delete(id);
+        });
+
+        // 5. Update Dropped Guns
+        const incomingGunIds = new Set<string>();
+        const rawGuns = Array.isArray(payload.guns) ? payload.guns : [];
+        for (let i = 0; i < rawGuns.length; i++) {
+          const g = rawGuns[i];
+          const gId = g.id || `gun_${i}`;
+          incomingGunIds.add(gId);
+          const { fx, fy } = worldToFraction(g.x, g.y, mapInfo);
+          const existing = gunsRef.current.get(gId);
+          if (existing) {
+            existing.tx = fx;
+            existing.ty = fy;
+            existing.x = g.x;
+            existing.y = g.y;
+            existing.z = g.z;
+            existing.name = g.name;
+          } else {
+            gunsRef.current.set(gId, {
+              id: gId,
+              name: g.name,
+              x: g.x,
+              y: g.y,
+              z: g.z,
+              rx: fx,
+              ry: fy,
+              tx: fx,
+              ty: fy,
+              bornTime: now,
+            });
+          }
+        }
+        gunsRef.current.forEach((_, id) => {
+          if (!incomingGunIds.has(id)) gunsRef.current.delete(id);
         });
       }
     }
@@ -739,8 +1099,62 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
 
       const realNow = Date.now();
 
-      // Draw C4 Bomb if present
-      if (bombRef.current) {
+      // ── 1. Draw Active Smokes (Under players) ─────────────────────
+      if (showSmokes) {
+        smokesRef.current.forEach((smoke) => {
+          const dx = smoke.tx - smoke.rx;
+          const dy = smoke.ty - smoke.ry;
+          if (Math.hypot(dx, dy) > 0.1 || isNaN(smoke.rx)) {
+            smoke.rx = smoke.tx;
+            smoke.ry = smoke.ty;
+          } else {
+            smoke.rx = lerp(smoke.rx, smoke.tx, 0.35);
+            smoke.ry = lerp(smoke.ry, smoke.ty, 0.35);
+          }
+          const scx = offsetX + smoke.rx * size;
+          const scy = offsetY + smoke.ry * size;
+          drawSmoke(ctx, smoke, scx, scy, mapInfo, size, realNow);
+        });
+      }
+
+      // ── 2. Draw Active Molotovs (Under players) ───────────────────
+      if (showMolotovs) {
+        molotovsRef.current.forEach((molo) => {
+          const dx = molo.tx - molo.rx;
+          const dy = molo.ty - molo.ry;
+          if (Math.hypot(dx, dy) > 0.1 || isNaN(molo.rx)) {
+            molo.rx = molo.tx;
+            molo.ry = molo.ty;
+          } else {
+            molo.rx = lerp(molo.rx, molo.tx, 0.35);
+            molo.ry = lerp(molo.ry, molo.ty, 0.35);
+          }
+          const mcx = offsetX + molo.rx * size;
+          const mcy = offsetY + molo.ry * size;
+          drawMolotov(ctx, molo, mcx, mcy, mapInfo, size, realNow);
+        });
+      }
+
+      // ── 3. Draw Dropped Weapons / Guns ───────────────────────────
+      if (showGuns) {
+        gunsRef.current.forEach((gun) => {
+          const dx = gun.tx - gun.rx;
+          const dy = gun.ty - gun.ry;
+          if (Math.hypot(dx, dy) > 0.1 || isNaN(gun.rx)) {
+            gun.rx = gun.tx;
+            gun.ry = gun.ty;
+          } else {
+            gun.rx = lerp(gun.rx, gun.tx, 0.35);
+            gun.ry = lerp(gun.ry, gun.ty, 0.35);
+          }
+          const gcx = offsetX + gun.rx * size;
+          const gcy = offsetY + gun.ry * size;
+          drawDroppedGun(ctx, gun, gcx, gcy);
+        });
+      }
+
+      // ── 4. Draw C4 Bomb Marker (if dropped on ground) ────────────
+      if (bombRef.current && !bombRef.current.isCarried) {
         const b = bombRef.current;
         const bdx = b.tx - b.rx;
         const bdy = b.ty - b.ry;
@@ -756,13 +1170,12 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         drawBomb(ctx, b, bcx, bcy, mapInfo, realNow);
       }
 
-      // Draw Players with adaptive continuous smoothness (zero delay, zero stutter)
+      // ── 5. Draw Players (with carrier badge & interpolated movement)
       stateRef.current.forEach((p) => {
         const dx = p.tx - p.rx;
         const dy = p.ty - p.ry;
         const dist = Math.hypot(dx, dy);
 
-        // Snap immediately on large jumps (spawn / round reset), interpolate smoothly for running/walking
         if (dist > 0.18 || isNaN(p.rx) || isNaN(p.ry)) {
           p.rx = p.tx;
           p.ry = p.ty;
@@ -794,6 +1207,9 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       showGrid,
       showNames,
       showVisionCones,
+      showSmokes,
+      showMolotovs,
+      showGuns,
       radarZoom,
     ]);
 
