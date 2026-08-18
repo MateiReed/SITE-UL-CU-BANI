@@ -79,7 +79,7 @@ export function transformExecutorPayload(exec: ExecutorPayload): RadarPayload {
   const transformedPlayers: PlayerData[] = rawPlayers.map((rawP: unknown, index: number) => {
     const p = (rawP && typeof rawP === "object" ? rawP : {}) as Record<string, unknown>;
     const rawPos = p.pos as Record<string, unknown> | number[] | undefined;
-    
+
     // Extract position (pos.x, pos[0], p.x, etc.)
     let x = 0;
     let y = 0;
@@ -187,3 +187,5 @@ export function getRadarState(): RadarPayload | undefined {
 export function setRadarState(payload: RadarPayload | undefined): void {
   global.__radarState = payload;
 }
+// sal
+// sal
