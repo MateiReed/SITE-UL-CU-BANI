@@ -595,87 +595,104 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       panRef.current = { x: 0, y: 0 };
     }, [mapId]);
 
-    // Update target coordinates when new payload arrives
-    useEffect(() => {
+    // Track the last processed payload to avoid re-processing
+    const lastPayloadRef = useRef<RadarPayload | null>(null);
+
+    // Synchronous payload processing — runs inline every render,
+    // NOT inside useEffect, so React batching can never skip players.
+    if (payload !== lastPayloadRef.current) {
+      lastPayloadRef.current = payload;
+
       if (!payload) {
         bombRef.current = null;
-        return;
-      }
-
-      const mapInfo = getMapInfo(payload.map);
-      const currentState = stateRef.current;
-      const incomingIds = new Set<string>();
-      const now = Date.now();
-
-      // Update Bomb interpolation target
-      if (payload.bomb) {
-        const { fx, fy } = worldToFraction(
-          payload.bomb.x,
-          payload.bomb.y,
-          mapInfo
-        );
-        if (bombRef.current) {
-          bombRef.current.tx = fx;
-          bombRef.current.ty = fy;
-          bombRef.current.x = payload.bomb.x;
-          bombRef.current.y = payload.bomb.y;
-          bombRef.current.z = payload.bomb.z;
-        } else {
-          bombRef.current = {
-            ...payload.bomb,
-            rx: fx,
-            ry: fy,
-            tx: fx,
-            ty: fy,
-          };
-        }
       } else {
-        bombRef.current = null;
-      }
+        const mapInfo = getMapInfo(payload.map);
+        const currentState = stateRef.current;
+        const incomingIds = new Set<string>();
+        const now = Date.now();
 
-      // Update Players interpolation target
-      payload.players.forEach((p) => {
-        incomingIds.add(p.id);
-        const { fx, fy } = worldToFraction(p.x, p.y, mapInfo);
-        const existing = currentState.get(p.id);
-
-        if (existing) {
-          existing.tx = fx;
-          existing.ty = fy;
-
-          if (existing.wasAlive && !p.isAlive) {
-            existing.deathTimestamp = now;
-          } else if (p.isAlive) {
-            existing.deathTimestamp = undefined;
+        // Update Bomb interpolation target
+        if (payload.bomb) {
+          const { fx, fy } = worldToFraction(
+            payload.bomb.x,
+            payload.bomb.y,
+            mapInfo
+          );
+          if (bombRef.current) {
+            bombRef.current.tx = fx;
+            bombRef.current.ty = fy;
+            bombRef.current.x = payload.bomb.x;
+            bombRef.current.y = payload.bomb.y;
+            bombRef.current.z = payload.bomb.z;
+          } else {
+            bombRef.current = {
+              ...payload.bomb,
+              rx: fx,
+              ry: fy,
+              tx: fx,
+              ty: fy,
+            };
           }
-
-          existing.wasAlive = p.isAlive;
-          Object.assign(existing, p);
-          existing.tx = fx;
-          existing.ty = fy;
         } else {
-          const interp: InterpolatedPlayer = {
-            ...p,
-            rx: fx,
-            ry: fy,
-            tx: fx,
-            ty: fy,
-            wasAlive: p.isAlive,
-            deathTimestamp: !p.isAlive ? now : undefined,
-          };
-          currentState.set(p.id, interp);
+          bombRef.current = null;
         }
-      });
 
-      currentState.forEach((p, id) => {
-        if (!incomingIds.has(id)) {
-          if (!p.deathTimestamp) p.deathTimestamp = now;
-          if (now - p.deathTimestamp >= DEATH_FADE_DURATION_MS) {
-            currentState.delete(id);
+        // Update ALL players interpolation targets — process every single one
+        for (let i = 0; i < payload.players.length; i++) {
+          const p = payload.players[i];
+          incomingIds.add(p.id);
+          const { fx, fy } = worldToFraction(p.x, p.y, mapInfo);
+          const existing = currentState.get(p.id);
+
+          if (existing) {
+            // Update death/alive transition
+            if (existing.wasAlive && !p.isAlive) {
+              existing.deathTimestamp = now;
+            } else if (p.isAlive) {
+              existing.deathTimestamp = undefined;
+            }
+            existing.wasAlive = p.isAlive;
+
+            // Copy all player data fields
+            existing.id = p.id;
+            existing.name = p.name;
+            existing.team = p.team;
+            existing.x = p.x;
+            existing.y = p.y;
+            existing.z = p.z;
+            existing.yaw = p.yaw;
+            existing.health = p.health;
+            existing.armor = p.armor;
+            existing.isAlive = p.isAlive;
+
+            // Set interpolation targets
+            existing.tx = fx;
+            existing.ty = fy;
+          } else {
+            const interp: InterpolatedPlayer = {
+              ...p,
+              rx: fx,
+              ry: fy,
+              tx: fx,
+              ty: fy,
+              wasAlive: p.isAlive,
+              deathTimestamp: !p.isAlive ? now : undefined,
+            };
+            currentState.set(p.id, interp);
           }
         }
-      });
-    }, [payload]);
+
+        // Clean up players no longer in payload
+        currentState.forEach((p, id) => {
+          if (!incomingIds.has(id)) {
+            if (!p.deathTimestamp) p.deathTimestamp = now;
+            if (now - p.deathTimestamp >= DEATH_FADE_DURATION_MS) {
+              currentState.delete(id);
+            }
+          }
+        });
+      }
+    }
 
     const animate = useCallback(() => {
       const canvas = canvasRef.current;

@@ -277,6 +277,12 @@ export default function Page() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [toggleFullscreen]);
 
+  // Refs to avoid recreating handleIncomingPayload (and thus WebSocket) on map/setting changes
+  const selectedMapRef = useRef(selectedMap);
+  selectedMapRef.current = selectedMap;
+  const autoFollowMapRef = useRef(autoFollowMap);
+  autoFollowMapRef.current = autoFollowMap;
+
   // Process incoming telemetry packet
   const handleIncomingPayload = useCallback(
     (data: RadarPayload) => {
@@ -292,15 +298,15 @@ export default function Page() {
       setLastPacketTime(new Date().toLocaleTimeString());
       sfx.playPing();
 
-      if (autoFollowMap && data.map) {
+      if (autoFollowMapRef.current && data.map) {
         const autoMap = normalizeMapId(data.map);
-        if (autoMap !== selectedMap) {
+        if (autoMap !== selectedMapRef.current) {
           setSelectedMap(autoMap);
         }
       }
       setStatus("live");
     },
-    [selectedMap, autoFollowMap]
+    [] // stable — no deps, uses refs for dynamic values
   );
 
   // ── Protocol Transport: WebSocket Mode (Default) ───────────────────
@@ -440,7 +446,7 @@ export default function Page() {
           setLastPacketTime(new Date().toLocaleTimeString());
           return next;
         });
-      }, 50);
+      }, 5);
     } else {
       if (mockIntervalRef.current) clearInterval(mockIntervalRef.current);
     }
