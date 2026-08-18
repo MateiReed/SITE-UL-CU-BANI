@@ -187,5 +187,3 @@ export function getRadarState(): RadarPayload | undefined {
 export function setRadarState(payload: RadarPayload | undefined): void {
   global.__radarState = payload;
 }
-// sal
-// sal

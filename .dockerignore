@@ -1,0 +1,9 @@
+node_modules
+.next
+.git
+.gitignore
+*.md
+*.log
+.DS_Store
+.env*.local
+*.tsbuildinfo
