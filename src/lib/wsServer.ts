@@ -4,6 +4,8 @@ import {
   type RadarPayload,
   type ExecutorPayload,
   transformExecutorPayload,
+  setRadarRawState,
+  getRadarRawState,
 } from "./radarStore";
 
 declare global {
@@ -11,6 +13,8 @@ declare global {
   var __wss: WebSocketServer | undefined;
   // eslint-disable-next-line no-var
   var __radarState: RadarPayload | undefined;
+  // eslint-disable-next-line no-var
+  var __rawRadarState: unknown | undefined;
 }
 
 export function getOrCreateWSS(): WebSocketServer {
@@ -19,12 +23,16 @@ export function getOrCreateWSS(): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
 
   wss.on("connection", (ws: WebSocket) => {
-    // Only send state if it is recent (within last 8 seconds)
+    // Send state on connection if recent
     if (global.__radarState && global.__radarState.timestamp) {
-      const isRecent = Date.now() - global.__radarState.timestamp < 8000;
+      const isRecent = Date.now() - global.__radarState.timestamp < 15000;
       if (isRecent) {
         try {
-          ws.send(JSON.stringify(global.__radarState));
+          const raw = getRadarRawState() ?? global.__radarState;
+          ws.send(JSON.stringify({
+            ...global.__radarState,
+            _raw: raw,
+          }));
         } catch {
           /* ignore */
         }
@@ -36,11 +44,11 @@ export function getOrCreateWSS(): WebSocketServer {
       try {
         const text = raw.toString();
         const parsed = JSON.parse(text);
-        if (parsed) {
+        if (parsed && typeof parsed === "object") {
           if (parsed.type === "CLEAR") {
             clearRadarState();
-          } else if (parsed.map && Array.isArray(parsed.players)) {
-            broadcastExecutorPayload(parsed as ExecutorPayload);
+          } else {
+            broadcastExecutorPayload(parsed);
           }
         }
       } catch {
@@ -57,14 +65,19 @@ export function getOrCreateWSS(): WebSocketServer {
   return wss;
 }
 
-export function broadcastRadarState(payload: RadarPayload): void {
+export function broadcastRadarState(payload: RadarPayload, rawBody?: unknown): void {
   global.__radarState = {
     ...payload,
     timestamp: Date.now(),
   };
+  const rawToStore = rawBody !== undefined ? rawBody : payload;
+  setRadarRawState(rawToStore);
 
   const wss = getOrCreateWSS();
-  const data = JSON.stringify(global.__radarState);
+  const data = JSON.stringify({
+    ...global.__radarState,
+    _raw: rawToStore,
+  });
 
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
@@ -77,16 +90,17 @@ export function broadcastRadarState(payload: RadarPayload): void {
   });
 }
 
-export function broadcastExecutorPayload(exec: ExecutorPayload): RadarPayload {
-  const transformed = transformExecutorPayload(exec);
-  broadcastRadarState(transformed);
+export function broadcastExecutorPayload(exec: unknown): RadarPayload {
+  const transformed = transformExecutorPayload(exec as ExecutorPayload);
+  broadcastRadarState(transformed, exec);
   return transformed;
 }
 
 export function clearRadarState(): void {
   global.__radarState = undefined;
+  setRadarRawState(undefined);
   const wss = getOrCreateWSS();
-  const clearMsg = JSON.stringify({ type: "CLEARED", map: "de_dust2", players: [] });
+  const clearMsg = JSON.stringify({ type: "CLEARED", map: "de_dust2", players: [], _raw: null });
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       try {
@@ -112,3 +126,4 @@ export function handleUpgrade(
     wss.emit("connection", ws, req);
   });
 }
+

@@ -491,20 +491,22 @@ export default function Page() {
 
   // Process incoming telemetry packet
   const handleIncomingPayload = useCallback(
-    (rawData: unknown) => {
-      if (!rawData || typeof rawData !== "object") return;
-      const rawObj = rawData as Record<string, unknown>;
-      if (!rawObj.map || !Array.isArray(rawObj.players)) return;
+    (incomingData: unknown) => {
+      if (!incomingData || typeof incomingData !== "object") return;
+      const incomingObj = incomingData as Record<string, unknown>;
+
+      // Extract raw body if attached as _raw, otherwise incomingData itself is the raw data
+      const rawToSave = incomingObj._raw !== undefined ? incomingObj._raw : incomingData;
+      setRawPayload(rawToSave);
 
       const data = transformExecutorPayload(
-        rawObj as unknown as ExecutorPayload
+        incomingObj as unknown as ExecutorPayload
       );
 
       const now = Date.now();
       if (data.timestamp) {
         setLatency(Math.max(0, now - data.timestamp));
       }
-      setRawPayload(rawData);
       setPayload(data);
       setPacketCount((c) => c + 1);
       lastPacketDateRef.current = now;
@@ -563,9 +565,10 @@ export default function Page() {
 
         if (parsed?.type === "CLEARED") {
           setPayload(null);
+          setRawPayload(null);
           setStatus("awaiting");
-        } else if (parsed?.map && Array.isArray(parsed.players)) {
-          handleIncomingPayload(parsed as RadarPayload);
+        } else if (parsed && typeof parsed === "object") {
+          handleIncomingPayload(parsed);
         }
       } catch {
         /* ignore parse errors */
@@ -593,8 +596,11 @@ export default function Page() {
         const res = await fetch("/api/radar", { cache: "no-store" });
         if (res.ok) {
           const json = await res.json();
-          if (json?.state && json.state.map) {
-            handleIncomingPayload(json.state as RadarPayload);
+          if (json?.state || json?.raw) {
+            const rawObj = json.raw ?? json.state;
+            const stateObj = json.state ?? json.raw;
+            setRawPayload(rawObj);
+            handleIncomingPayload({ ...stateObj, _raw: rawObj });
           }
         }
       } catch {
@@ -1779,7 +1785,7 @@ export default function Page() {
                       <button
                         onClick={() =>
                           copyToClipboard(
-                            JSON.stringify(payload, null, 2),
+                            JSON.stringify(rawPayload ?? payload, null, 2),
                             "JSON Payload Copied!"
                           )
                         }

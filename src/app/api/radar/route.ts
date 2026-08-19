@@ -3,6 +3,8 @@ import {
   transformExecutorPayload,
   getRadarState,
   setRadarState,
+  getRadarRawState,
+  setRadarRawState,
   type ExecutorPayload,
 } from "@/lib/radarStore";
 import { broadcastRadarState, clearRadarState } from "@/lib/wsServer";
@@ -10,25 +12,27 @@ import { broadcastRadarState, clearRadarState } from "@/lib/wsServer";
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  let body: ExecutorPayload;
+  let body: unknown;
   try {
-    body = (await req.json()) as ExecutorPayload;
+    body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  if (!body || !body.map || !Array.isArray(body.players)) {
+  if (!body || typeof body !== "object") {
     return NextResponse.json(
-      { error: "Invalid payload structure. Expected { map, players[] }" },
-      { status: 422 }
+      { error: "Invalid payload: Expected JSON object" },
+      { status: 400 }
     );
   }
 
-  const transformed = transformExecutorPayload(body);
+  setRadarRawState(body);
+  const transformed = transformExecutorPayload(body as ExecutorPayload);
+  setRadarState(transformed);
 
   // Broadcast to WebSocket clients if WS server is running
   try {
-    broadcastRadarState(transformed);
+    broadcastRadarState(transformed, body);
   } catch {
     /* ignore if running on Vercel without WS server */
   }
@@ -36,14 +40,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   return NextResponse.json({
     ok: true,
     players: transformed.players.length,
+    smokes: transformed.smokes?.length ?? 0,
+    molotovs: transformed.molotovs?.length ?? 0,
+    guns: transformed.guns?.length ?? 0,
     map: transformed.map,
   });
 }
 
 export async function GET(): Promise<NextResponse> {
   const state = getRadarState() ?? null;
+  const raw = getRadarRawState() ?? state;
   return NextResponse.json(
-    { state },
+    { state, raw },
     {
       headers: {
         "Cache-Control": "no-store, no-cache, must-revalidate",
@@ -54,6 +62,7 @@ export async function GET(): Promise<NextResponse> {
 
 export async function DELETE(): Promise<NextResponse> {
   setRadarState(undefined);
+  setRadarRawState(undefined);
   try {
     clearRadarState();
   } catch {
@@ -61,3 +70,4 @@ export async function DELETE(): Promise<NextResponse> {
   }
   return NextResponse.json({ ok: true, message: "Radar state cleared" });
 }
+
