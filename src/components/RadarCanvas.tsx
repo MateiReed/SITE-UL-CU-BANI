@@ -765,7 +765,8 @@ function drawPlayer(
     ctx.textBaseline = "bottom";
 
     const baseTxt = p.name ? p.name.slice(0, 14) : "Player";
-    const txt = hasBomb ? `💣 ${baseTxt}` : baseTxt;
+    const weaponSuffix = p.currentWeapon ? ` [${p.currentWeapon}]` : "";
+    const txt = hasBomb ? `💣 ${baseTxt}${weaponSuffix}` : `${baseTxt}${weaponSuffix}`;
     const metrics = ctx.measureText(txt);
 
     ctx.fillStyle = "rgba(4, 7, 18, 0.88)";
@@ -924,6 +925,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
             existing.armor = p.armor;
             existing.isAlive = p.isAlive;
             existing.hasBomb = p.hasBomb;
+            existing.currentWeapon = p.currentWeapon;
 
             existing.tx = fx;
             existing.ty = fy;

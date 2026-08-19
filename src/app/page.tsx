@@ -1569,6 +1569,7 @@ export default function Page() {
                         <th className="pb-2 px-3">STEAMID</th>
                         <th className="pb-2 px-3">NAME</th>
                         <th className="pb-2 px-3">TEAM</th>
+                        <th className="pb-2 px-3">WEAPON</th>
                         <th className="pb-2 px-3">HP</th>
                         <th className="pb-2 px-3">ARMOR</th>
                         <th className="pb-2 px-3">POSITION (X, Y, Z)</th>
@@ -1620,6 +1621,15 @@ export default function Page() {
                                   {p.team}
                                 </span>
                               </td>
+                              <td className="py-2 px-3">
+                                {p.currentWeapon ? (
+                                  <span className="px-2 py-0.5 bg-slate-800/90 text-amber-300 border border-amber-500/25 rounded-lg text-[10px] font-mono font-bold">
+                                    {p.currentWeapon}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-600 text-[10px]">--</span>
+                                )}
+                              </td>
                               <td className="py-2 px-3 font-bold">
                                 <span
                                   className={
@@ -1660,7 +1670,7 @@ export default function Page() {
                       ) : (
                         <tr>
                           <td
-                            colSpan={8}
+                            colSpan={9}
                             className="py-8 text-center text-slate-500 font-mono"
                           >
                             No players registered in current telemetry frame.
@@ -2085,6 +2095,7 @@ export default function Page() {
                         <th className="pb-3 px-3">STEAMID</th>
                         <th className="pb-3 px-3">NAME</th>
                         <th className="pb-3 px-3">TEAM</th>
+                        <th className="pb-3 px-3">WEAPON</th>
                         <th className="pb-3 px-3">HP</th>
                         <th className="pb-3 px-3">ARMOR</th>
                         <th className="pb-3 px-3">POSITION (X, Y, Z)</th>
@@ -2127,6 +2138,15 @@ export default function Page() {
                                 >
                                   {p.team}
                                 </span>
+                              </td>
+                              <td className="py-2.5 px-3">
+                                {p.currentWeapon ? (
+                                  <span className="px-2.5 py-1 bg-slate-800/90 text-amber-300 border border-amber-500/25 rounded-lg text-xs font-mono font-bold">
+                                    {p.currentWeapon}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-600 text-xs">--</span>
+                                )}
                               </td>
                               <td className="py-2.5 px-3 font-bold">
                                 <span

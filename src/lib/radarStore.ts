@@ -31,6 +31,10 @@ export interface ExecutorPlayer {
   angle?: number | string;
   rotation?: number | string;
   eyeAngles?: { y?: number | string; yaw?: number | string };
+  current_weapon?: string;
+  currentWeapon?: string;
+  activeWeapon?: string;
+  weapon?: string;
 }
 
 export interface ExecutorBomb {
@@ -122,7 +126,6 @@ export interface ExecutorPayload {
   projectiles?: unknown;
   utils?: unknown;
   utilities?: unknown;
-  _raw?: unknown;
   [key: string]: unknown;
 }
 
@@ -138,6 +141,7 @@ export interface PlayerData {
   armor: number;
   isAlive: boolean;
   hasBomb?: boolean;
+  currentWeapon?: string;
 }
 
 export interface BombData {
@@ -415,6 +419,11 @@ export function transformExecutorPayload(exec: ExecutorPayload): RadarPayload {
     }
     usedIds.add(finalId);
 
+    const rawWeapon = String(
+      p.current_weapon ?? p.currentWeapon ?? p.weapon ?? p.activeWeapon ?? ""
+    ).trim();
+    const currentWeapon = rawWeapon ? cleanWeaponName(rawWeapon) : undefined;
+
     return {
       id: finalId,
       name,
@@ -427,6 +436,7 @@ export function transformExecutorPayload(exec: ExecutorPayload): RadarPayload {
       armor,
       isAlive,
       hasBomb: false,
+      currentWeapon,
     };
   });
 
