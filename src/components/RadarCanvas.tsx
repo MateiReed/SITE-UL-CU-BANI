@@ -755,27 +755,6 @@ function drawPlayer(
     }
   }
 
-  // ── Vertical Level Arrow (Z-level) ───────────────────────────────
-  const zDelta = p.z - mapInfo.zMid;
-  const zThreshold = 75;
-  if (alive && Math.abs(zDelta) > zThreshold) {
-    const isUp = zDelta > 0;
-    const ax = cx + BASE_PLAYER_RADIUS + (hasBomb ? 22 : 4.5);
-    const ay = cy;
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath();
-    if (isUp) {
-      ctx.moveTo(ax, ay - 6);
-      ctx.lineTo(ax + 4, ay + 3);
-      ctx.lineTo(ax - 4, ay + 3);
-    } else {
-      ctx.moveTo(ax, ay + 6);
-      ctx.lineTo(ax + 4, ay - 3);
-      ctx.lineTo(ax - 4, ay - 3);
-    }
-    ctx.closePath();
-    ctx.fill();
-  }
 
   // ── Player Name Tag ──────────────────────────────────────────────
   if (showNames) {
