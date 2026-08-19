@@ -828,6 +828,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
 
     const rafRef = useRef<number>(0);
     const fpsRef = useRef({ frames: 0, lastTime: performance.now() });
+    const lastFrameTimeRef = useRef<number>(0);
+    const activeMapRef = useRef<string>(mapId);
 
     // Interactive Drag / Pan & Wheel Zoom State
     const panRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -866,8 +868,10 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         smokesRef.current.clear();
         molotovsRef.current.clear();
         gunsRef.current.clear();
+        activeMapRef.current = mapId;
       } else {
         const targetMap = normalizeMapId(payload.map || mapId);
+        activeMapRef.current = targetMap;
         const mapInfo = getMapInfo(targetMap);
         const currentState = stateRef.current;
         const incomingIds = new Set<string>();
@@ -1065,7 +1069,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
 
       const w = canvas.width;
       const h = canvas.height;
-      const currentActiveMap = normalizeMapId(payload?.map || mapId);
+      const currentActiveMap = activeMapRef.current || normalizeMapId(mapId);
       const mapInfo = getMapInfo(currentActiveMap);
 
       // Base square size that fits in viewport
@@ -1077,6 +1081,13 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       const offsetY = (h - size) / 2 + panRef.current.y;
 
       const now = performance.now();
+
+      // Delta-time for frame-rate independent interpolation
+      const deltaMs = lastFrameTimeRef.current > 0 ? Math.min(now - lastFrameTimeRef.current, 100) : 16.667;
+      lastFrameTimeRef.current = now;
+      const deltaS = deltaMs / 1000;
+      // Time-based exponential smoothing: consistent speed regardless of fps or network jitter
+      const smoothFactor = 1 - Math.exp(-20 * deltaS);
       fpsRef.current.frames++;
       if (now - fpsRef.current.lastTime >= 1000) {
         onFpsUpdate?.(fpsRef.current.frames);
@@ -1108,8 +1119,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
             smoke.rx = smoke.tx;
             smoke.ry = smoke.ty;
           } else {
-            smoke.rx = lerp(smoke.rx, smoke.tx, 0.35);
-            smoke.ry = lerp(smoke.ry, smoke.ty, 0.35);
+            smoke.rx = lerp(smoke.rx, smoke.tx, smoothFactor);
+            smoke.ry = lerp(smoke.ry, smoke.ty, smoothFactor);
           }
           const scx = offsetX + smoke.rx * size;
           const scy = offsetY + smoke.ry * size;
@@ -1126,8 +1137,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
             molo.rx = molo.tx;
             molo.ry = molo.ty;
           } else {
-            molo.rx = lerp(molo.rx, molo.tx, 0.35);
-            molo.ry = lerp(molo.ry, molo.ty, 0.35);
+            molo.rx = lerp(molo.rx, molo.tx, smoothFactor);
+            molo.ry = lerp(molo.ry, molo.ty, smoothFactor);
           }
           const mcx = offsetX + molo.rx * size;
           const mcy = offsetY + molo.ry * size;
@@ -1144,8 +1155,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
             gun.rx = gun.tx;
             gun.ry = gun.ty;
           } else {
-            gun.rx = lerp(gun.rx, gun.tx, 0.35);
-            gun.ry = lerp(gun.ry, gun.ty, 0.35);
+            gun.rx = lerp(gun.rx, gun.tx, smoothFactor);
+            gun.ry = lerp(gun.ry, gun.ty, smoothFactor);
           }
           const gcx = offsetX + gun.rx * size;
           const gcy = offsetY + gun.ry * size;
@@ -1162,8 +1173,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
           b.rx = b.tx;
           b.ry = b.ty;
         } else {
-          b.rx = lerp(b.rx, b.tx, 0.4);
-          b.ry = lerp(b.ry, b.ty, 0.4);
+          b.rx = lerp(b.rx, b.tx, smoothFactor);
+          b.ry = lerp(b.ry, b.ty, smoothFactor);
         }
         const bcx = offsetX + b.rx * size;
         const bcy = offsetY + b.ry * size;
@@ -1180,8 +1191,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
           p.rx = p.tx;
           p.ry = p.ty;
         } else {
-          p.rx = lerp(p.rx, p.tx, 0.38);
-          p.ry = lerp(p.ry, p.ty, 0.38);
+          p.rx = lerp(p.rx, p.tx, smoothFactor);
+          p.ry = lerp(p.ry, p.ty, smoothFactor);
         }
 
         const cx = offsetX + p.rx * size;
@@ -1202,7 +1213,6 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       rafRef.current = requestAnimationFrame(animate);
     }, [
       mapId,
-      payload,
       onFpsUpdate,
       showGrid,
       showNames,
