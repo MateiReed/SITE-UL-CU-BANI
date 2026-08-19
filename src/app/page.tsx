@@ -9,7 +9,7 @@ import React, {
 } from "react";
 import dynamic from "next/dynamic";
 import { MAPS, normalizeMapId } from "@/lib/mapData";
-import type { RadarPayload, ExecutorPayload } from "@/lib/radarStore";
+import type { RadarPayload, ExecutorPayload, PlayerData } from "@/lib/radarStore";
 import { transformExecutorPayload } from "@/lib/radarStore";
 
 const RadarCanvas = dynamic(() => import("@/components/RadarCanvas"), {
@@ -19,6 +19,164 @@ const RadarCanvas = dynamic(() => import("@/components/RadarCanvas"), {
 export type StreamMode = "websocket" | "http";
 type ConnectionStatus = "live" | "awaiting" | "connecting" | "offline";
 type InspectorSize = "compact" | "expanded" | "modal";
+
+function getWeaponBadgeStyle(name?: string) {
+  if (!name) return { bg: "bg-slate-800", text: "text-slate-400", border: "border-slate-700" };
+  const upper = name.toUpperCase();
+  if (upper.includes("AWP") || upper.includes("SSG") || upper.includes("SCAR") || upper.includes("G3SG1")) {
+    return { bg: "bg-purple-950/70", text: "text-purple-300", border: "border-purple-500/40" };
+  }
+  if (upper.includes("AK") || upper.includes("M4") || upper.includes("GALIL") || upper.includes("FAMAS") || upper.includes("AUG") || upper.includes("SG")) {
+    return { bg: "bg-amber-950/70", text: "text-amber-300", border: "border-amber-500/40" };
+  }
+  if (upper.includes("DEAGLE") || upper.includes("DESERT") || upper.includes("USP") || upper.includes("GLOCK") || upper.includes("P250") || upper.includes("FIVE") || upper.includes("CZ") || upper.includes("REVOLVER")) {
+    return { bg: "bg-sky-950/70", text: "text-sky-300", border: "border-sky-500/40" };
+  }
+  if (upper.includes("MP9") || upper.includes("MAC") || upper.includes("MP7") || upper.includes("MP5") || upper.includes("UMP") || upper.includes("P90") || upper.includes("BIZON")) {
+    return { bg: "bg-emerald-950/70", text: "text-emerald-300", border: "border-emerald-500/40" };
+  }
+  return { bg: "bg-slate-800", text: "text-slate-300", border: "border-slate-700" };
+}
+
+function PlayerCard({
+  player,
+  isFocused,
+  onSelect,
+}: {
+  player: PlayerData;
+  isFocused: boolean;
+  onSelect: () => void;
+}) {
+  const isT = player.team === "T";
+  const alive = player.isAlive;
+  const wStyle = getWeaponBadgeStyle(player.currentWeapon);
+
+  const hpPercent = Math.max(0, Math.min(100, player.health));
+  const hpColor =
+    player.health > 50
+      ? "from-emerald-500 to-green-400"
+      : player.health > 20
+      ? "from-amber-500 to-yellow-400"
+      : "from-rose-500 to-red-600";
+
+  return (
+    <div
+      onClick={onSelect}
+      className={`group rounded-2xl p-2.5 transition-all duration-200 cursor-pointer border-y border-r relative overflow-hidden ${
+        isT
+          ? "border-l-[5px] border-l-amber-500 shadow-amber-500/5"
+          : "border-l-[5px] border-l-cyan-400 shadow-cyan-500/5"
+      } ${
+        !alive
+          ? "bg-slate-950/40 border-white/[0.04] opacity-35 grayscale hover:opacity-60"
+          : isFocused
+          ? isT
+            ? "bg-gradient-to-r from-amber-950/70 via-slate-900/90 to-slate-950 border-amber-400 shadow-lg shadow-amber-500/25 scale-[1.01]"
+            : "bg-gradient-to-r from-cyan-950/70 via-slate-900/90 to-slate-950 border-cyan-400 shadow-lg shadow-cyan-500/25 scale-[1.01]"
+          : isT
+          ? "bg-gradient-to-r from-amber-950/35 via-slate-900/80 to-slate-950/90 border-amber-500/25 hover:border-amber-400/60 hover:from-amber-950/50"
+          : "bg-gradient-to-r from-cyan-950/35 via-slate-900/80 to-slate-950/90 border-cyan-500/25 hover:border-cyan-400/60 hover:from-cyan-950/50"
+      }`}
+    >
+      {/* Top row: Team badge + Name + C4 icon + Status */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0 truncate">
+          {/* Prominent Team Badge */}
+          {isT ? (
+            <span className="px-1.5 py-0.5 rounded-md text-[9px] font-mono font-black bg-amber-500/30 text-amber-300 border border-amber-400/60 shrink-0 tracking-wider shadow-sm shadow-amber-500/30">
+              💣 T
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded-md text-[9px] font-mono font-black bg-cyan-500/30 text-cyan-200 border border-cyan-400/60 shrink-0 tracking-wider shadow-sm shadow-cyan-500/30">
+              🛡️ CT
+            </span>
+          )}
+
+          {player.hasBomb && (
+            <span
+              className="text-xs px-1.5 py-0.2 bg-red-500/30 text-red-200 rounded border border-red-500/60 font-black animate-pulse shrink-0"
+              title="Carrying C4"
+            >
+              💣 C4
+            </span>
+          )}
+
+          <span
+            className={`font-mono font-bold text-xs truncate ${
+              !alive
+                ? "text-slate-400 line-through"
+                : isT
+                ? "text-amber-100 group-hover:text-amber-300"
+                : "text-cyan-100 group-hover:text-cyan-300"
+            }`}
+          >
+            {player.name}
+          </span>
+
+          {isFocused && (
+            <span className="text-[9px] font-mono font-black px-1.5 rounded-full bg-cyan-500/30 text-cyan-200 border border-cyan-400 shrink-0">
+              FOCUS
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {alive ? (
+            <span className="text-[9px] font-mono font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+              ALIVE
+            </span>
+          ) : (
+            <span className="text-[9px] font-mono font-black px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/40">
+              DEAD
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Middle row: Weapon badge + Armor + Health value */}
+      <div className="flex items-center justify-between gap-2 mt-2">
+        <div className="flex items-center gap-1.5 truncate">
+          {player.currentWeapon ? (
+            <span
+              className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-lg border ${wStyle.bg} ${wStyle.text} ${wStyle.border} truncate shadow-sm`}
+            >
+              🔫 {player.currentWeapon}
+            </span>
+          ) : (
+            <span className="text-[10px] font-mono text-slate-500 italic">
+              No weapon
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 font-mono text-[10px] shrink-0">
+          <span className="text-cyan-300 font-bold flex items-center gap-0.5 bg-cyan-950/50 px-1.5 py-0.5 rounded border border-cyan-800/40">
+            🛡️ {player.armor}
+          </span>
+          <span
+            className={`font-bold px-1.5 py-0.5 rounded border ${
+              player.health > 50
+                ? "text-emerald-300 bg-emerald-950/50 border-emerald-800/40"
+                : player.health > 20
+                ? "text-amber-300 bg-amber-950/50 border-amber-800/40"
+                : "text-rose-300 bg-rose-950/50 border-rose-800/40"
+            }`}
+          >
+            ❤️ {player.health}
+          </span>
+        </div>
+      </div>
+
+      {/* Bottom Health Bar */}
+      <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden mt-2 border border-white/[0.04]">
+        <div
+          className={`h-full bg-gradient-to-r ${hpColor} transition-all duration-300 rounded-full`}
+          style={{ width: `${alive ? hpPercent : 0}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 
 // ─── Sound System (Synthesized Web Audio API) ──────────────────────────────
 class SoundFX {
@@ -358,6 +516,60 @@ export default function Page() {
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [autoFollowMap, setAutoFollowMap] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<"players" | "settings">("players");
+  const [sidebarTeamTab, setSidebarTeamTab] = useState<"T" | "CT">("T");
+  const [fullscreenPlayersVisible, setFullscreenPlayersVisible] = useState(true);
+  const [fullscreenTeamTab, setFullscreenTeamTab] = useState<"T" | "CT">("T");
+  const [rosterPos, setRosterPos] = useState<{ x: number; y: number } | null>(null);
+  const [isDraggingRoster, setIsDraggingRoster] = useState(false);
+  const dragStartRef = useRef<{
+    startMouseX: number;
+    startMouseY: number;
+    startPosX: number;
+    startPosY: number;
+  } | null>(null);
+
+  const handleRosterPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button")) return;
+
+    e.preventDefault();
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+
+    const currentX = rosterPos?.x ?? 16;
+    const currentY = rosterPos?.y ?? 64;
+
+    dragStartRef.current = {
+      startMouseX: e.clientX,
+      startMouseY: e.clientY,
+      startPosX: currentX,
+      startPosY: currentY,
+    };
+    setIsDraggingRoster(true);
+  }, [rosterPos]);
+
+  const handleRosterPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current) return;
+    e.preventDefault();
+
+    const dx = e.clientX - dragStartRef.current.startMouseX;
+    const dy = e.clientY - dragStartRef.current.startMouseY;
+
+    const newX = Math.max(8, Math.min(window.innerWidth - 340, dragStartRef.current.startPosX + dx));
+    const newY = Math.max(8, Math.min(window.innerHeight - 120, dragStartRef.current.startPosY + dy));
+
+    setRosterPos({ x: newX, y: newY });
+  }, []);
+
+  const handleRosterPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragStartRef.current = null;
+    setIsDraggingRoster(false);
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+  }, []);
 
   // Canvas Viewport Controls
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1059,217 +1271,241 @@ export default function Page() {
           </div>
 
           {!sidebarCollapsed && (
-            <div className="flex-1 overflow-y-auto p-3 space-y-3">
-              {/* Competitive Pool (Comfortable 2-Column Grid) */}
-              <div className="bg-slate-900/50 border border-slate-700/40 rounded-3xl p-3 shadow-md backdrop-blur-2xl space-y-2">
-                <div className="text-xs font-mono font-black text-slate-300 uppercase tracking-wider flex items-center justify-between">
-                  <span>COMPETITIVE POOL</span>
-                  <span className="text-[10px] text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/30 font-black">
-                    {MAPS.length} MAPS
-                  </span>
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+              {/* Main Sidebar Tabs: PLAYERS vs SETTINGS */}
+              <div className="p-3 pb-2 shrink-0">
+                <div className="grid grid-cols-2 p-1 bg-slate-950/80 rounded-2xl border border-white/[0.08] shadow-inner gap-1">
+                  <button
+                    onClick={() => setSidebarTab("players")}
+                    className={`py-1.5 px-3 rounded-xl text-xs font-mono font-black transition-all duration-200 flex items-center justify-center gap-1.5 ${
+                      sidebarTab === "players"
+                        ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-cyan-500/25 scale-[1.02]"
+                        : "text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]"
+                    }`}
+                  >
+                    <span>👥 PLAYERS</span>
+                    <span className="text-[10px] bg-black/30 px-1.5 py-0.2 rounded-full">
+                      {(tPlayers.length + ctPlayers.length) || 0}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setSidebarTab("settings")}
+                    className={`py-1.5 px-3 rounded-xl text-xs font-mono font-black transition-all duration-200 flex items-center justify-center gap-1.5 ${
+                      sidebarTab === "settings"
+                        ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-cyan-500/25 scale-[1.02]"
+                        : "text-slate-400 hover:text-slate-200 hover:bg-white/[0.05]"
+                    }`}
+                  >
+                    <span>⚙️ SETTINGS</span>
+                  </button>
                 </div>
-                {/* 2-Column Map Matrix */}
-                <div className="grid grid-cols-2 gap-1.5">
-                  {MAPS.map((m) => {
-                    const isSelected = selectedMap === m.id;
-                    return (
-                      <button
-                        key={m.id}
-                        onClick={() => handleMapChange(m.id)}
-                        className={`text-left px-2.5 py-1.5 rounded-2xl text-xs font-mono transition-all duration-150 flex items-center justify-between border truncate ${
-                          isSelected
-                            ? "bg-gradient-to-r from-cyan-500/25 to-blue-600/20 border-cyan-500/60 text-cyan-300 font-bold shadow-sm shadow-cyan-500/20 scale-[1.01]"
-                            : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 hover:border-slate-700/40"
-                        }`}
-                        title={m.displayName}
-                      >
-                        <div className="flex items-center gap-2 truncate">
-                          <span
-                            className="w-2 h-2 rounded-full shrink-0"
-                            style={{ backgroundColor: m.accent }}
+              </div>
+
+              {/* Tab Content */}
+              {sidebarTab === "players" ? (
+                <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-3">
+                  {/* Terrorists Section */}
+                  <div className="space-y-2">
+                    <div className="bg-gradient-to-r from-amber-500/25 via-amber-950/40 to-slate-950 border border-amber-500/50 rounded-2xl p-2.5 flex items-center justify-between text-xs font-mono shadow-md shadow-amber-500/10">
+                      <div className="flex items-center gap-2 font-black text-amber-400 tracking-wider">
+                        <span className="text-sm">💣</span>
+                        <span>TERRORISTS</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px]">
+                        <span className="text-slate-950 font-black bg-amber-400 px-2.5 py-0.5 rounded-full shadow-sm">
+                          {tAlive}/{tPlayers.length} ALIVE
+                        </span>
+                        <span className="text-amber-300 font-bold bg-amber-950/60 px-2 py-0.5 rounded-lg border border-amber-500/40">
+                          {tTotalHp} HP
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      {tPlayers.length > 0 ? (
+                        tPlayers.map((p) => (
+                          <PlayerCard
+                            key={p.id}
+                            player={p}
+                            isFocused={selectedPlayerId === p.id}
+                            onSelect={() => setSelectedPlayerId(selectedPlayerId === p.id ? null : p.id)}
                           />
-                          <span className="truncate font-medium">{m.displayName}</span>
+                        ))
+                      ) : (
+                        <div className="p-3 text-center text-slate-500 font-mono text-xs">
+                          No Terrorists registered.
                         </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Squad Status Telemetry Cards */}
-              <div className="bg-slate-900/50 border border-slate-700/40 rounded-3xl p-3 shadow-md backdrop-blur-2xl space-y-2">
-                <div className="text-xs font-mono font-black text-slate-300 uppercase tracking-wider flex items-center justify-between">
-                  <span>SQUAD TELEMETRY</span>
-                  <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    LIVE
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="bg-amber-500/[0.08] border border-amber-500/30 rounded-2xl p-2.5 text-center shadow-sm">
-                    <div className="text-amber-400 font-mono font-black text-xl leading-none">
-                      {tAlive}
-                      <span className="text-xs text-amber-600 font-normal">
-                        /{tPlayers.length || 0}
-                      </span>
-                    </div>
-                    <div className="text-[10px] font-mono font-black text-amber-400 mt-0.5 uppercase tracking-wider">
-                      TERRORISTS
-                    </div>
-                    <div className="text-[10px] font-mono text-slate-400">
-                      {tTotalHp} HP
+                      )}
                     </div>
                   </div>
 
-                  <div className="bg-cyan-500/[0.08] border border-cyan-500/30 rounded-2xl p-2.5 text-center shadow-sm">
-                    <div className="text-cyan-400 font-mono font-black text-xl leading-none">
-                      {ctAlive}
-                      <span className="text-xs text-cyan-600 font-normal">
-                        /{ctPlayers.length || 0}
+                  {/* Tactical Divider Between Teams */}
+                  <div className="relative py-2.5 my-1 flex items-center justify-center">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-slate-700/60" />
+                    </div>
+                    <div className="relative bg-slate-950 px-3 py-0.5 rounded-full border border-slate-700/60 flex items-center gap-2 shadow-lg shadow-black/60">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                      <span className="text-[10px] font-mono font-black text-slate-400 tracking-widest uppercase">
+                        VS
                       </span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
                     </div>
-                    <div className="text-[10px] font-mono font-black text-cyan-400 mt-0.5 uppercase tracking-wider">
-                      COUNTER-T
+                  </div>
+
+                  {/* Counter-Terrorists Section */}
+                  <div className="space-y-2 pt-0.5">
+                    <div className="bg-gradient-to-r from-cyan-500/25 via-cyan-950/40 to-slate-950 border border-cyan-500/50 rounded-2xl p-2.5 flex items-center justify-between text-xs font-mono shadow-md shadow-cyan-500/10">
+                      <div className="flex items-center gap-2 font-black text-cyan-400 tracking-wider">
+                        <span className="text-sm">🛡️</span>
+                        <span>COUNTER-TERRORISTS</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px]">
+                        <span className="text-slate-950 font-black bg-cyan-400 px-2.5 py-0.5 rounded-full shadow-sm">
+                          {ctAlive}/{ctPlayers.length} ALIVE
+                        </span>
+                        <span className="text-cyan-300 font-bold bg-cyan-950/60 px-2 py-0.5 rounded-lg border border-cyan-500/40">
+                          {ctTotalHp} HP
+                        </span>
+                      </div>
                     </div>
-                    <div className="text-[10px] font-mono text-slate-400">
-                      {ctTotalHp} HP
+
+                    <div className="space-y-1.5">
+                      {ctPlayers.length > 0 ? (
+                        ctPlayers.map((p) => (
+                          <PlayerCard
+                            key={p.id}
+                            player={p}
+                            isFocused={selectedPlayerId === p.id}
+                            onSelect={() => setSelectedPlayerId(selectedPlayerId === p.id ? null : p.id)}
+                          />
+                        ))
+                      ) : (
+                        <div className="p-3 text-center text-slate-500 font-mono text-xs">
+                          No Counter-Terrorists registered.
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
+              ) : (
+                /* SETTINGS TAB */
+                <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                  {/* Competitive Pool (Comfortable 2-Column Grid) */}
+                  <div className="bg-slate-900/50 border border-slate-700/40 rounded-3xl p-3 shadow-md backdrop-blur-2xl space-y-2">
+                    <div className="text-xs font-mono font-black text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                      <span>COMPETITIVE POOL</span>
+                      <span className="text-[10px] text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/30 font-black">
+                        {MAPS.length} MAPS
+                      </span>
+                    </div>
+                    {/* 2-Column Map Matrix */}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {MAPS.map((m) => {
+                        const isSelected = selectedMap === m.id;
+                        return (
+                          <button
+                            key={m.id}
+                            onClick={() => handleMapChange(m.id)}
+                            className={`text-left px-2.5 py-1.5 rounded-2xl text-xs font-mono transition-all duration-150 flex items-center justify-between border truncate ${
+                              isSelected
+                                ? "bg-gradient-to-r from-cyan-500/25 to-blue-600/20 border-cyan-500/60 text-cyan-300 font-bold shadow-sm shadow-cyan-500/20 scale-[1.01]"
+                                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 hover:border-slate-700/40"
+                            }`}
+                            title={m.displayName}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <span
+                                className="w-2 h-2 rounded-full shrink-0"
+                                style={{ backgroundColor: m.accent }}
+                              />
+                              <span className="truncate font-medium">{m.displayName}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
 
-                {/* C4 Bomb Status Inline */}
-                <div className="py-2 px-3 rounded-2xl bg-slate-950/60 border border-slate-700/40 text-xs font-mono flex items-center justify-between shadow-inner">
-                  <span className="text-slate-400 flex items-center gap-1.5">
-                    <span>💣 BOMB:</span>
-                  </span>
-                  {bombCarrier ? (
-                    <span className="text-amber-400 font-bold flex items-center gap-1 truncate max-w-[140px]">
-                      <span className="text-white underline truncate">{bombCarrier.name}</span>
-                    </span>
-                  ) : payload?.bomb ? (
-                    <span className="text-rose-400 font-bold animate-pulse text-[10px]">
-                      PLANTED / GROUND
-                    </span>
-                  ) : (
-                    <span className="text-slate-500">None</span>
-                  )}
-                </div>
-              </div>
+                  {/* HUD Preferences with Modern Toggle Switches */}
+                  <div className="bg-slate-900/50 border border-slate-700/40 rounded-3xl p-3 shadow-md backdrop-blur-2xl space-y-1.5">
+                    <div className="text-xs font-mono font-black text-slate-300 uppercase tracking-wider">
+                      HUD PREFERENCES
+                    </div>
+                    <div className="space-y-1.5">
+                      <ToggleSwitch
+                        label="Player Names"
+                        shortcut="N"
+                        checked={showNames}
+                        onChange={setShowNames}
+                      />
+                      <ToggleSwitch
+                        label="FOV Cones"
+                        shortcut="V"
+                        checked={showVisionCones}
+                        onChange={setShowVisionCones}
+                      />
+                      <ToggleSwitch
+                        label="Active Smokes"
+                        shortcut="S"
+                        checked={showSmokes}
+                        onChange={setShowSmokes}
+                      />
+                      <ToggleSwitch
+                        label="Active Molotovs"
+                        shortcut="K"
+                        checked={showMolotovs}
+                        onChange={setShowMolotovs}
+                      />
+                      <ToggleSwitch
+                        label="Dropped Weapons"
+                        shortcut="U"
+                        checked={showGuns}
+                        onChange={setShowGuns}
+                      />
+                      <ToggleSwitch
+                        label="Tactical Reticle"
+                        shortcut="G"
+                        checked={showGrid}
+                        onChange={setShowGrid}
+                      />
+                      <ToggleSwitch
+                        label="Auto-Follow Map"
+                        shortcut="Auto"
+                        checked={autoFollowMap}
+                        onChange={setAutoFollowMap}
+                      />
 
-              {/* Focused Player Spotlight Card */}
-              {selectedPlayer && (
-                <div className="bg-gradient-to-br from-amber-500/10 to-transparent border border-amber-500/30 rounded-3xl p-3 shadow-md space-y-2 animate-fade-in backdrop-blur-2xl">
-                  <div className="text-xs font-mono font-black text-amber-400 uppercase tracking-wider flex items-center justify-between">
-                    <span>🎯 FOCUSED PLAYER</span>
+                      {/* Radar Zoom Slider */}
+                      <div className="p-2 rounded-2xl bg-slate-950/60 border border-slate-700/40 flex items-center justify-between gap-2.5 shadow-inner mt-1">
+                        <span className="text-xs font-mono text-slate-300 shrink-0">
+                          Zoom: <strong className="text-cyan-400">{radarZoom.toFixed(1)}x</strong>
+                        </span>
+                        <input
+                          type="range"
+                          min="0.8"
+                          max="1.5"
+                          step="0.1"
+                          value={radarZoom}
+                          onChange={(e) => setRadarZoom(parseFloat(e.target.value))}
+                          className="w-28 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions (Clear Radar) */}
+                  <div className="pt-1">
                     <button
-                      onClick={() => setSelectedPlayerId(null)}
-                      className="text-slate-400 hover:text-white text-xs px-1"
-                      title="Clear Focus"
+                      onClick={handleClearRadar}
+                      className="w-full py-2 px-3 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-mono font-bold rounded-2xl transition-all"
                     >
-                      ✕
+                      🗑️ CLEAR RADAR STATE
                     </button>
-                  </div>
-                  <div className="bg-slate-950/70 border border-white/[0.08] rounded-2xl p-2.5 space-y-2 text-xs font-mono">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-white text-sm flex items-center gap-1.5 truncate">
-                        {selectedPlayer.hasBomb && <span>💣</span>}
-                        <span className="truncate">{selectedPlayer.name}</span>
-                      </span>
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                          selectedPlayer.team === "T"
-                            ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
-                            : "bg-cyan-500/20 text-cyan-400 border border-cyan-500/40"
-                        }`}
-                      >
-                        {selectedPlayer.team}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-1.5 text-xs">
-                      <div className="bg-slate-900/80 p-1.5 rounded-xl border border-white/[0.04]">
-                        <span className="text-slate-500 text-[10px]">HP:</span>{" "}
-                        <span className="text-emerald-400 font-bold">
-                          {selectedPlayer.health}
-                        </span>
-                      </div>
-                      <div className="bg-slate-900/80 p-1.5 rounded-xl border border-white/[0.04]">
-                        <span className="text-slate-500 text-[10px]">ARMOR:</span>{" "}
-                        <span className="text-cyan-400 font-bold">
-                          {selectedPlayer.armor}
-                        </span>
-                      </div>
-                    </div>
                   </div>
                 </div>
               )}
-
-              {/* HUD Preferences with Modern Toggle Switches */}
-              <div className="bg-slate-900/50 border border-slate-700/40 rounded-3xl p-3 shadow-md backdrop-blur-2xl space-y-1.5">
-                <div className="text-xs font-mono font-black text-slate-300 uppercase tracking-wider">
-                  HUD PREFERENCES
-                </div>
-                <div className="space-y-1.5">
-                  <ToggleSwitch
-                    label="Player Names"
-                    shortcut="N"
-                    checked={showNames}
-                    onChange={setShowNames}
-                  />
-                  <ToggleSwitch
-                    label="FOV Cones"
-                    shortcut="V"
-                    checked={showVisionCones}
-                    onChange={setShowVisionCones}
-                  />
-                  <ToggleSwitch
-                    label="Active Smokes"
-                    shortcut="S"
-                    checked={showSmokes}
-                    onChange={setShowSmokes}
-                  />
-                  <ToggleSwitch
-                    label="Active Molotovs"
-                    shortcut="K"
-                    checked={showMolotovs}
-                    onChange={setShowMolotovs}
-                  />
-                  <ToggleSwitch
-                    label="Dropped Weapons"
-                    shortcut="U"
-                    checked={showGuns}
-                    onChange={setShowGuns}
-                  />
-                  <ToggleSwitch
-                    label="Tactical Reticle"
-                    shortcut="G"
-                    checked={showGrid}
-                    onChange={setShowGrid}
-                  />
-                  <ToggleSwitch
-                    label="Auto-Follow Map"
-                    shortcut="Auto"
-                    checked={autoFollowMap}
-                    onChange={setAutoFollowMap}
-                  />
-
-                  {/* Radar Zoom Slider */}
-                  <div className="p-2 rounded-2xl bg-slate-950/60 border border-slate-700/40 flex items-center justify-between gap-2.5 shadow-inner mt-1">
-                    <span className="text-xs font-mono text-slate-300 shrink-0">
-                      Zoom: <strong className="text-cyan-400">{radarZoom.toFixed(1)}x</strong>
-                    </span>
-                    <input
-                      type="range"
-                      min="0.8"
-                      max="1.5"
-                      step="0.1"
-                      value={radarZoom}
-                      onChange={(e) => setRadarZoom(parseFloat(e.target.value))}
-                      className="w-28 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                    />
-                  </div>
-                </div>
-              </div>
             </div>
           )}
         </aside>
@@ -1342,9 +1578,146 @@ export default function Page() {
               )}
             </div>
 
+            {/* In Fullscreen: Floating Draggable Player Overlay */}
+            {isFullscreen && (
+              <div
+                onPointerDown={handleRosterPointerDown}
+                onPointerMove={handleRosterPointerMove}
+                onPointerUp={handleRosterPointerUp}
+                style={
+                  rosterPos
+                    ? { left: rosterPos.x, top: rosterPos.y, position: "fixed" }
+                    : { left: 16, top: 64, position: "absolute" }
+                }
+                className={`z-30 flex flex-col pointer-events-auto max-h-[calc(100vh-5.5rem)] ${
+                  fullscreenPlayersVisible ? "w-80" : "w-auto"
+                } ${isDraggingRoster ? "cursor-grabbing" : ""}`}
+              >
+                {fullscreenPlayersVisible ? (
+                  <div className="flex flex-col bg-slate-900/90 backdrop-blur-3xl border border-slate-700/60 rounded-3xl p-3 shadow-2xl space-y-2 overflow-hidden animate-fade-in max-h-full">
+                    {/* Draggable Header */}
+                    <div className={`flex items-center justify-between border-b border-slate-700/40 pb-2 shrink-0 ${isDraggingRoster ? "cursor-grabbing" : "cursor-grab"}`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-500 text-xs select-none" title="Drag to reposition">⠿</span>
+                        <span className="text-xs font-mono font-black text-white uppercase tracking-wider select-none">
+                          👥 SQUAD ROSTER
+                        </span>
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold">
+                          {tAlive + ctAlive} ALIVE
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setFullscreenPlayersVisible(false)}
+                        className="p-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700/40 text-xs transition-colors"
+                        title="Collapse player roster"
+                      >
+                        ◀
+                      </button>
+                    </div>
+
+                    {/* Player Cards: Auto-fit Height with max-h Scroll */}
+                    <div className="overflow-y-auto space-y-3 pr-0.5 max-h-[calc(100vh-10rem)]">
+                      {/* Terrorists Section */}
+                      <div className="space-y-2">
+                        <div className="bg-gradient-to-r from-amber-500/25 via-amber-950/40 to-slate-950 border border-amber-500/50 rounded-2xl p-2 flex items-center justify-between text-xs font-mono shadow-md shadow-amber-500/10">
+                          <div className="flex items-center gap-1.5 font-black text-amber-400">
+                            <span className="text-sm">💣</span>
+                            <span>TERRORISTS</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[10px]">
+                            <span className="text-slate-950 font-black bg-amber-400 px-2 py-0.5 rounded-full shadow-sm">
+                              {tAlive}/{tPlayers.length} ALIVE
+                            </span>
+                            <span className="text-amber-300 font-bold bg-amber-950/60 px-2 py-0.5 rounded-lg border border-amber-500/40">
+                              {tTotalHp} HP
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          {tPlayers.length > 0 ? (
+                            tPlayers.map((p) => (
+                              <PlayerCard
+                                key={p.id}
+                                player={p}
+                                isFocused={selectedPlayerId === p.id}
+                                onSelect={() => setSelectedPlayerId(selectedPlayerId === p.id ? null : p.id)}
+                              />
+                            ))
+                          ) : (
+                            <div className="p-2 text-center text-slate-500 font-mono text-xs">
+                              No Terrorists.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Tactical Divider Between Teams */}
+                      <div className="relative py-2.5 my-1 flex items-center justify-center">
+                        <div className="absolute inset-0 flex items-center">
+                          <div className="w-full border-t border-slate-700/60" />
+                        </div>
+                        <div className="relative bg-slate-950 px-3 py-0.5 rounded-full border border-slate-700/60 flex items-center gap-2 shadow-lg shadow-black/60">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                          <span className="text-[10px] font-mono font-black text-slate-400 tracking-widest uppercase">
+                            VS
+                          </span>
+                          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                        </div>
+                      </div>
+
+                      {/* Counter-Terrorists Section */}
+                      <div className="space-y-2 pt-0.5">
+                        <div className="bg-gradient-to-r from-cyan-500/25 via-cyan-950/40 to-slate-950 border border-cyan-500/50 rounded-2xl p-2 flex items-center justify-between text-xs font-mono shadow-md shadow-cyan-500/10">
+                          <div className="flex items-center gap-1.5 font-black text-cyan-400">
+                            <span className="text-sm">🛡️</span>
+                            <span>COUNTER-TERRORISTS</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[10px]">
+                            <span className="text-slate-950 font-black bg-cyan-400 px-2 py-0.5 rounded-full shadow-sm">
+                              {ctAlive}/{ctPlayers.length} ALIVE
+                            </span>
+                            <span className="text-cyan-300 font-bold bg-cyan-950/60 px-2 py-0.5 rounded-lg border border-cyan-500/40">
+                              {ctTotalHp} HP
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          {ctPlayers.length > 0 ? (
+                            ctPlayers.map((p) => (
+                              <PlayerCard
+                                key={p.id}
+                                player={p}
+                                isFocused={selectedPlayerId === p.id}
+                                onSelect={() => setSelectedPlayerId(selectedPlayerId === p.id ? null : p.id)}
+                              />
+                            ))
+                          ) : (
+                            <div className="p-2 text-center text-slate-500 font-mono text-xs">
+                              No Counter-Terrorists.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* Collapsed Floating Button */
+                  <button
+                    onClick={() => setFullscreenPlayersVisible(true)}
+                    className="bg-slate-900/90 hover:bg-slate-800 backdrop-blur-2xl border border-slate-700/60 rounded-2xl px-3.5 py-2 text-xs font-mono font-black text-white shadow-2xl flex items-center gap-2 transition-transform hover:scale-105"
+                    title="Expand player roster"
+                  >
+                    <span>👥 SQUAD ROSTER ({tAlive + ctAlive}) ▶</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* In Fullscreen: Discreet Exit Button in Top-Right */}
             {isFullscreen && (
-              <div className="absolute top-4 right-4 z-20 animate-fade-in">
+              <div className="absolute top-4 right-4 z-20 animate-fade-in pointer-events-auto">
                 <button
                   onClick={toggleFullscreen}
                   className="bg-slate-900/80 hover:bg-slate-800 backdrop-blur-2xl border border-slate-700/60 text-slate-200 hover:text-white px-3.5 py-1.5 rounded-2xl text-xs font-mono font-black flex items-center gap-2 shadow-2xl transition-transform hover:scale-105"
