@@ -331,6 +331,7 @@ export default function Page() {
   const [mounted, setMounted] = useState(false);
   const [selectedMap, setSelectedMap] = useState("de_dust2");
   const [payload, setPayload] = useState<RadarPayload | null>(null);
+  const [rawPayload, setRawPayload] = useState<unknown>(null);
 
   // ── Protocol Mode Selector (Default: WebSocket) ───────────────────
   const [streamMode, setStreamMode] = useState<StreamMode>("websocket");
@@ -503,6 +504,7 @@ export default function Page() {
       if (data.timestamp) {
         setLatency(Math.max(0, now - data.timestamp));
       }
+      setRawPayload(rawData);
       setPayload(data);
       setPacketCount((c) => c + 1);
       lastPacketDateRef.current = now;
@@ -672,6 +674,7 @@ export default function Page() {
 
   const handleClearRadar = async () => {
     setPayload(null);
+    setRawPayload(null);
     setSelectedPlayerId(null);
     setStatus("awaiting");
     try {
@@ -691,8 +694,8 @@ export default function Page() {
   };
 
   const downloadJson = () => {
-    if (!payload) return;
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    if (!rawPayload) return;
+    const blob = new Blob([JSON.stringify(rawPayload, null, 2)], {
       type: "application/json",
     });
     const url = URL.createObjectURL(blob);
@@ -1788,7 +1791,7 @@ export default function Page() {
                   </div>
                   <div className="bg-slate-950/80 p-3 rounded-2xl border border-slate-700/40 max-h-64 overflow-y-auto">
                     <HighlightedJson
-                      data={payload}
+                      data={rawPayload}
                       searchTerm={jsonSearchQuery}
                     />
                   </div>
@@ -2062,7 +2065,7 @@ export default function Page() {
               {activeTab === "raw" && (
                 <div className="rounded-2xl p-4 bg-slate-950/80 border border-slate-700/40">
                   <HighlightedJson
-                    data={payload}
+                    data={rawPayload}
                     searchTerm={jsonSearchQuery}
                   />
                 </div>

@@ -566,8 +566,20 @@ function drawPlayer(
     if (!p.deathTimestamp) {
       p.deathTimestamp = now;
     }
-    // Keep dead players visible with translucent ghost marker
-    opacity = 0.65;
+    // Stay fully visible for 1s, then fade out over the next 1s
+    const deathAge = now - (p.deathTimestamp ?? now);
+    const HOLD_MS = 1000;   // full-opacity hold time
+    const FADE_MS = 1000;   // fade-out duration after hold
+    if (deathAge <= HOLD_MS) {
+      opacity = 0.85;
+    } else {
+      const fadeProgress = Math.min(1, (deathAge - HOLD_MS) / FADE_MS);
+      opacity = 0.85 * (1 - fadeProgress);
+    }
+    // Skip drawing entirely once fully faded
+    if (opacity <= 0.01) {
+      return false;
+    }
   }
 
   ctx.save();
