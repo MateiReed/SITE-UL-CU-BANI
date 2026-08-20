@@ -58,6 +58,10 @@ export interface RadarCanvasProps {
   showMolotovs?: boolean;
   showGuns?: boolean;
   radarZoom?: number;
+  focusedPlayerId?: string | null;
+  isFollowingPlayer?: boolean;
+  onSelectPlayer?: (playerId: string | null) => void;
+  onZoomChange?: (zoom: number) => void;
 }
 
 export interface RadarCanvasHandle {
@@ -67,10 +71,12 @@ export interface RadarCanvasHandle {
 
 // ─── Visual Constants ────────────────────────────────────────────────────────
 const BASE_PLAYER_RADIUS = 9.5;
+const FOCUSED_PLAYER_RADIUS = 14.5;
 const CONE_LENGTH = 28;
 const CONE_HALF_ANGLE = Math.PI / 6; // 30°
 
 const HEALTH_BAR_W = 24;
+const FOCUSED_HEALTH_BAR_W = 34;
 const HEALTH_BAR_H = 3.5;
 const ARMOR_BAR_H = 2.5;
 
@@ -553,7 +559,9 @@ function drawPlayer(
   mapInfo: MapInfo,
   showNames: boolean,
   showVisionCones: boolean,
-  now: number
+  now: number,
+  isFocused: boolean = false,
+  isFollowed: boolean = false
 ): boolean {
   if (isNaN(cx) || isNaN(cy)) return false;
   const isT = p.team === "T";
@@ -582,14 +590,87 @@ function drawPlayer(
     }
   }
 
+  const currentRadius = isFocused ? FOCUSED_PLAYER_RADIUS : BASE_PLAYER_RADIUS;
+
   ctx.save();
   ctx.globalAlpha = opacity;
+
+  // ── Focused Player Animated Beacon / Pulsing Rings ──────────────
+  if (isFocused && alive) {
+    ctx.save();
+    const pulse1 = (now * 0.002) % 1; // 0..1
+    const pulse2 = (now * 0.002 + 0.5) % 1; // 0..1
+
+    const ringColor = isT ? "245, 158, 11" : "56, 189, 248";
+
+    // Shockwave 1
+    const r1 = currentRadius + pulse1 * 26;
+    const a1 = (1 - pulse1) * 0.75;
+    ctx.strokeStyle = `rgba(${ringColor}, ${a1})`;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r1, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Shockwave 2
+    const r2 = currentRadius + pulse2 * 26;
+    const a2 = (1 - pulse2) * 0.75;
+    ctx.strokeStyle = `rgba(${ringColor}, ${a2})`;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r2, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Steady Outer Target Ring with Corner Reticles
+    const targetRingRadius = currentRadius + 5.5;
+    ctx.strokeStyle = isT ? "#fde047" : "#a5f3fc";
+    ctx.lineWidth = 1.8;
+    ctx.shadowColor = isT ? "rgba(245, 158, 11, 0.9)" : "rgba(56, 189, 248, 0.9)";
+    ctx.shadowBlur = 14;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, targetRingRadius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // 4 Corner Tactical Crosshair Reticle Ticks
+    const tickLen = 6;
+    const tickDist = targetRingRadius + 2.5;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = isT ? "#fbbf24" : "#38bdf8";
+
+    // Top
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - tickDist);
+    ctx.lineTo(cx, cy - tickDist - tickLen);
+    ctx.stroke();
+
+    // Bottom
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + tickDist);
+    ctx.lineTo(cx, cy + tickDist + tickLen);
+    ctx.stroke();
+
+    // Left
+    ctx.beginPath();
+    ctx.moveTo(cx - tickDist, cy);
+    ctx.lineTo(cx - tickDist - tickLen, cy);
+    ctx.stroke();
+
+    // Right
+    ctx.beginPath();
+    ctx.moveTo(cx + tickDist, cy);
+    ctx.lineTo(cx + tickDist + tickLen, cy);
+    ctx.stroke();
+
+    ctx.restore();
+  }
 
   // ── FOV Vision Cone ──────────────────────────────────────────────
   if (alive && showVisionCones) {
     const yawRad = degToRad(-p.yaw);
     const dirX = Math.cos(yawRad);
     const dirY = Math.sin(yawRad);
+    const coneLen = isFocused ? CONE_LENGTH + 6 : CONE_LENGTH;
 
     ctx.save();
     ctx.fillStyle = isT ? COLOR_CONE_T : COLOR_CONE_CT;
@@ -599,20 +680,20 @@ function drawPlayer(
     const angleLeft = baseAngle - CONE_HALF_ANGLE;
     const angleRight = baseAngle + CONE_HALF_ANGLE;
     ctx.lineTo(
-      cx + Math.cos(angleLeft) * CONE_LENGTH,
-      cy + Math.sin(angleLeft) * CONE_LENGTH
+      cx + Math.cos(angleLeft) * coneLen,
+      cy + Math.sin(angleLeft) * coneLen
     );
-    ctx.arc(cx, cy, CONE_LENGTH, angleLeft, angleRight, false);
+    ctx.arc(cx, cy, coneLen, angleLeft, angleRight, false);
     ctx.closePath();
     ctx.fill();
 
     ctx.strokeStyle = isT ? "#fde047" : "#7dd3fc";
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = isFocused ? 2.2 : 1.5;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(
-      cx + dirX * (BASE_PLAYER_RADIUS + 7),
-      cy + dirY * (BASE_PLAYER_RADIUS + 7)
+      cx + dirX * (currentRadius + 8),
+      cy + dirY * (currentRadius + 8)
     );
     ctx.stroke();
     ctx.restore();
@@ -621,43 +702,57 @@ function drawPlayer(
   // ── Player Dot (Strictly centered on map pixel) ───────────────────
   const mainColor = alive
     ? isT
-      ? COLOR_T
-      : COLOR_CT
+      ? isFocused ? "#fbbf24" : COLOR_T
+      : isFocused ? "#38bdf8" : COLOR_CT
     : isT
     ? COLOR_T_DEAD
     : COLOR_CT_DEAD;
 
   if (alive) {
-    ctx.shadowColor = hasBomb
+    ctx.shadowColor = isFocused
+      ? isT ? "rgba(245, 158, 11, 0.95)" : "rgba(56, 189, 248, 0.95)"
+      : hasBomb
       ? "rgba(239, 68, 68, 0.9)"
       : isT
       ? COLOR_T_GLOW
       : COLOR_CT_GLOW;
-    ctx.shadowBlur = hasBomb ? 16 : 12;
+    ctx.shadowBlur = isFocused ? 24 : hasBomb ? 16 : 12;
   }
 
   ctx.beginPath();
-  ctx.arc(cx, cy, BASE_PLAYER_RADIUS, 0, Math.PI * 2);
+  ctx.arc(cx, cy, currentRadius, 0, Math.PI * 2);
   ctx.fillStyle = mainColor;
   ctx.fill();
   ctx.shadowBlur = 0;
 
-  ctx.strokeStyle = hasBomb ? "#ef4444" : alive ? "#ffffff" : "rgba(255,255,255,0.4)";
-  ctx.lineWidth = hasBomb ? 2.5 : 2;
-  ctx.stroke();
+  // Dot Borders: Double crisp border for focused player
+  if (isFocused) {
+    ctx.strokeStyle = isT ? "#78350f" : "#082f49";
+    ctx.lineWidth = 4;
+    ctx.stroke();
+
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
+  } else {
+    ctx.strokeStyle = hasBomb ? "#ef4444" : alive ? "#ffffff" : "rgba(255,255,255,0.4)";
+    ctx.lineWidth = hasBomb ? 2.5 : 2;
+    ctx.stroke();
+  }
 
   if (alive) {
-    ctx.fillStyle = isT ? "#1c1917" : "#0f172a";
-    ctx.font = `bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace`;
+    ctx.fillStyle = isT ? "#1c1917" : "#082f49";
+    const fontSize = isFocused ? 13 : 10;
+    ctx.font = `900 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(p.team, cx, cy);
+    ctx.fillText(p.team, cx, cy + (isFocused ? 0.5 : 0));
   }
 
   // ── C4 Bomb Carrier Badge attached to Player ─────────────────────
   if (alive && hasBomb) {
-    const badgeX = cx + BASE_PLAYER_RADIUS + 2;
-    const badgeY = cy - BASE_PLAYER_RADIUS - 2;
+    const badgeX = cx + currentRadius + 2;
+    const badgeY = cy - currentRadius - 2;
     
     // Pulsing C4 badge glow
     const bombPulse = (Math.sin(now * 0.008) + 1) / 2;
@@ -683,7 +778,7 @@ function drawPlayer(
   // ── Death Circle with X ──────────────────────────────────────────
   if (!alive) {
     ctx.beginPath();
-    ctx.arc(cx, cy, BASE_PLAYER_RADIUS + 1, 0, Math.PI * 2);
+    ctx.arc(cx, cy, currentRadius + 1, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(244, 63, 94, 0.4)";
     ctx.fill();
     ctx.strokeStyle = COLOR_DEAD_X;
@@ -692,7 +787,7 @@ function drawPlayer(
 
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 2.5;
-    const xSize = 5.5;
+    const xSize = isFocused ? 7.5 : 5.5;
     ctx.beginPath();
     ctx.moveTo(cx - xSize, cy - xSize);
     ctx.lineTo(cx + xSize, cy + xSize);
@@ -706,7 +801,7 @@ function drawPlayer(
       const deathElapsed = now - p.deathTimestamp;
       if (deathElapsed < 1200) {
         const waveProgress = deathElapsed / 1200;
-        const waveRadius = BASE_PLAYER_RADIUS + waveProgress * 16;
+        const waveRadius = currentRadius + waveProgress * 16;
         ctx.strokeStyle = `rgba(244, 63, 94, ${(1 - waveProgress) * 0.8})`;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
@@ -718,15 +813,16 @@ function drawPlayer(
 
   // ── Health & Armor Bars ──────────────────────────────────────────
   if (alive) {
-    const bx = cx - HEALTH_BAR_W / 2;
-    const by = cy + BASE_PLAYER_RADIUS + 4;
+    const barW = isFocused ? FOCUSED_HEALTH_BAR_W : HEALTH_BAR_W;
+    const bx = cx - barW / 2;
+    const by = cy + currentRadius + 4;
 
     ctx.fillStyle = COLOR_HP_BG;
     ctx.beginPath();
-    ctx.roundRect(bx, by, HEALTH_BAR_W, HEALTH_BAR_H, 2);
+    ctx.roundRect(bx, by, barW, HEALTH_BAR_H, 2);
     ctx.fill();
 
-    const hpW = (Math.max(0, Math.min(100, p.health)) / 100) * HEALTH_BAR_W;
+    const hpW = (Math.max(0, Math.min(100, p.health)) / 100) * barW;
     const hpColor =
       p.health > 50
         ? COLOR_HP_HIGH
@@ -743,11 +839,11 @@ function drawPlayer(
       const aby = by + HEALTH_BAR_H + 1.5;
       ctx.fillStyle = COLOR_HP_BG;
       ctx.beginPath();
-      ctx.roundRect(bx, aby, HEALTH_BAR_W, ARMOR_BAR_H, 1.5);
+      ctx.roundRect(bx, aby, barW, ARMOR_BAR_H, 1.5);
       ctx.fill();
 
       const armorW =
-        (Math.max(0, Math.min(100, p.armor)) / 100) * HEALTH_BAR_W;
+        (Math.max(0, Math.min(100, p.armor)) / 100) * barW;
       ctx.fillStyle = COLOR_ARMOR;
       ctx.beginPath();
       ctx.roundRect(bx, aby, armorW, ARMOR_BAR_H, 1.5);
@@ -755,39 +851,47 @@ function drawPlayer(
     }
   }
 
-
-  // ── Player Name Tag ──────────────────────────────────────────────
-  if (showNames) {
-    const labelY = cy - BASE_PLAYER_RADIUS - 4;
+  // ── Player Name Tag & Focus / Follow Badge ───────────────────────
+  if (showNames || isFocused) {
+    const labelY = cy - currentRadius - (isFocused ? 6 : 4);
     ctx.font =
-      "bold 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+      isFocused
+        ? "bold 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
+        : "bold 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
 
     const baseTxt = p.name ? p.name.slice(0, 14) : "Player";
     const weaponSuffix = p.currentWeapon ? ` [${p.currentWeapon}]` : "";
-    const txt = hasBomb ? `💣 ${baseTxt}${weaponSuffix}` : `${baseTxt}${weaponSuffix}`;
+    const prefix = isFollowed ? "🎯 TRACKING: " : isFocused ? "★ " : hasBomb ? "💣 " : "";
+    const txt = `${prefix}${baseTxt}${weaponSuffix}`;
     const metrics = ctx.measureText(txt);
 
-    ctx.fillStyle = "rgba(4, 7, 18, 0.88)";
-    ctx.strokeStyle = hasBomb
+    ctx.fillStyle = isFocused
+      ? isT ? "rgba(40, 20, 5, 0.94)" : "rgba(5, 25, 45, 0.94)"
+      : "rgba(4, 7, 18, 0.88)";
+    ctx.strokeStyle = isFocused
+      ? isT ? "#f59e0b" : "#38bdf8"
+      : hasBomb
       ? "rgba(239, 68, 68, 0.6)"
       : isT
       ? "rgba(245, 158, 11, 0.4)"
       : "rgba(56, 189, 248, 0.4)";
-    ctx.lineWidth = 1;
+    ctx.lineWidth = isFocused ? 1.8 : 1;
     ctx.beginPath();
     ctx.roundRect(
-      cx - metrics.width / 2 - 4,
-      labelY - 12,
-      metrics.width + 8,
-      13,
-      3
+      cx - metrics.width / 2 - 5,
+      labelY - 13,
+      metrics.width + 10,
+      14,
+      3.5
     );
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = alive ? (hasBomb ? "#fca5a5" : "#f8fafc") : "rgba(203, 213, 225, 0.5)";
+    ctx.fillStyle = isFocused
+      ? isT ? "#fef08a" : "#e0f2fe"
+      : alive ? (hasBomb ? "#fca5a5" : "#f8fafc") : "rgba(203, 213, 225, 0.5)";
     ctx.fillText(txt, cx, labelY);
   }
 
@@ -808,6 +912,10 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       showMolotovs = true,
       showGuns = true,
       radarZoom = 1.0,
+      focusedPlayerId = null,
+      isFollowingPlayer = false,
+      onSelectPlayer,
+      onZoomChange,
     },
     ref
   ) {
@@ -830,6 +938,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       x: 0,
       y: 0,
     });
+    const pointerDownInfoRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
     useImperativeHandle(ref, () => ({
       getCanvas: () => canvasRef.current,
@@ -1060,18 +1169,15 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
-      const w = canvas.width;
-      const h = canvas.height;
+      const rect = canvas.getBoundingClientRect();
+      const w = rect.width || canvas.width;
+      const h = rect.height || canvas.height;
       const currentActiveMap = activeMapRef.current || normalizeMapId(mapId);
       const mapInfo = getMapInfo(currentActiveMap);
 
       // Base square size that fits in viewport
       const baseSize = Math.min(w, h);
       const size = baseSize * radarZoom;
-
-      // Center offset + user pan offset
-      const offsetX = (w - size) / 2 + panRef.current.x;
-      const offsetY = (h - size) / 2 + panRef.current.y;
 
       const now = performance.now();
 
@@ -1087,6 +1193,25 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         fpsRef.current.frames = 0;
         fpsRef.current.lastTime = now;
       }
+
+      // ── Follow Mode Camera Tracking ──────────────────────────────
+      if (isFollowingPlayer && focusedPlayerId) {
+        const trackedPlayer = stateRef.current.get(focusedPlayerId);
+        if (trackedPlayer && !isNaN(trackedPlayer.rx) && !isNaN(trackedPlayer.ry)) {
+          // Camera centers trackedPlayer on viewport (w/2, h/2)
+          const targetPanX = (0.5 - trackedPlayer.rx) * size;
+          const targetPanY = (0.5 - trackedPlayer.ry) * size;
+          if (!isDraggingRef.current) {
+            const followSpeed = 1 - Math.exp(-15 * deltaS);
+            panRef.current.x = lerp(panRef.current.x, targetPanX, followSpeed);
+            panRef.current.y = lerp(panRef.current.y, targetPanY, followSpeed);
+          }
+        }
+      }
+
+      // Center offset + user pan offset
+      const offsetX = (w - size) / 2 + panRef.current.x;
+      const offsetY = (h - size) / 2 + panRef.current.y;
 
       ctx.clearRect(0, 0, w, h);
       drawMapBackground(
@@ -1174,8 +1299,16 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         drawBomb(ctx, b, bcx, bcy, mapInfo, realNow);
       }
 
-      // ── 5. Draw Players (with carrier badge & interpolated movement)
-      stateRef.current.forEach((p) => {
+      // ── 5. Draw Players (Focused player sorted to TOP layer) ─────
+      const playerList = Array.from(stateRef.current.values());
+      // Sort so focused player is rendered last (top z-index)
+      playerList.sort((a, b) => {
+        if (a.id === focusedPlayerId) return 1;
+        if (b.id === focusedPlayerId) return -1;
+        return 0;
+      });
+
+      playerList.forEach((p) => {
         const dx = p.tx - p.rx;
         const dy = p.ty - p.ry;
         const dist = Math.hypot(dx, dy);
@@ -1190,6 +1323,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
 
         const cx = offsetX + p.rx * size;
         const cy = offsetY + p.ry * size;
+        const isFocused = p.id === focusedPlayerId;
+        const isFollowed = isFocused && isFollowingPlayer;
 
         drawPlayer(
           ctx,
@@ -1199,7 +1334,9 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
           mapInfo,
           showNames,
           showVisionCones,
-          realNow
+          realNow,
+          isFocused,
+          isFollowed
         );
       });
 
@@ -1214,6 +1351,8 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       showMolotovs,
       showGuns,
       radarZoom,
+      focusedPlayerId,
+      isFollowingPlayer,
     ]);
 
     useEffect(() => {
@@ -1223,12 +1362,18 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       };
     }, [animate]);
 
-    // Handle mouse drag / pan
+    // Handle mouse drag / pan & click selection
     const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (e.button !== 0) return;
       isDraggingRef.current = true;
       dragStartRef.current = {
         x: e.clientX - panRef.current.x,
         y: e.clientY - panRef.current.y,
+      };
+      pointerDownInfoRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        time: Date.now(),
       };
     };
 
@@ -1240,9 +1385,68 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       };
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
       isDraggingRef.current = false;
+
+      // Check if it was a quick click to select/focus a player
+      if (pointerDownInfoRef.current) {
+        const dx = Math.abs(e.clientX - pointerDownInfoRef.current.x);
+        const dy = Math.abs(e.clientY - pointerDownInfoRef.current.y);
+        const elapsed = Date.now() - pointerDownInfoRef.current.time;
+
+        if (dx < 12 && dy < 12 && elapsed < 550) {
+          const canvas = canvasRef.current;
+          if (canvas) {
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            const w = rect.width;
+            const h = rect.height;
+            const baseSize = Math.min(w, h);
+            const size = baseSize * radarZoom;
+            const offsetX = (w - size) / 2 + panRef.current.x;
+            const offsetY = (h - size) / 2 + panRef.current.y;
+
+            let clickedPlayerId: string | null = null;
+            let minDistance = 32; // Generous 32px clickable hitbox
+
+            stateRef.current.forEach((p) => {
+              const cx = offsetX + p.rx * size;
+              const cy = offsetY + p.ry * size;
+              const dist = Math.hypot(clickX - cx, clickY - cy);
+              if (dist < minDistance) {
+                minDistance = dist;
+                clickedPlayerId = p.id;
+              }
+            });
+
+            if (clickedPlayerId) {
+              onSelectPlayer?.(clickedPlayerId);
+            }
+          }
+        }
+        pointerDownInfoRef.current = null;
+      }
     };
+
+    // Canvas Mouse Wheel Zoom Listener (Non-passive to prevent page scroll)
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const handleWheel = (e: WheelEvent) => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.15 : -0.15;
+        const newZoom = Math.max(0.6, Math.min(3.5, radarZoom + delta));
+        onZoomChange?.(Number(newZoom.toFixed(2)));
+      };
+
+      canvas.addEventListener("wheel", handleWheel, { passive: false });
+      return () => {
+        canvas.removeEventListener("wheel", handleWheel);
+      };
+    }, [radarZoom, onZoomChange]);
 
     useEffect(() => {
       const canvas = canvasRef.current;
