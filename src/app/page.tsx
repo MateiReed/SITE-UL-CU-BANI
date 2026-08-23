@@ -631,14 +631,28 @@ export default function Page() {
   }, []);
 
   const handleSelectPlayer = useCallback((id: string | null) => {
+    if (id === null) {
+      setSelectedPlayerId(null);
+      setIsFollowingPlayer(false);
+      return;
+    }
     setSelectedPlayerId((prev) => {
-      if (id === null || id === prev) {
-        setIsFollowingPlayer(false);
-        return null;
+      if (prev === id) {
+        // Second tap / click on same player: TOGGLE FOLLOW CAMERA!
+        setIsFollowingPlayer((f) => {
+          const next = !f;
+          if (next && radarZoom <= 1.0) {
+            setRadarZoom(1.8);
+          }
+          return next;
+        });
+        return id;
       }
+      // First tap / click on player: FOCUS PLAYER!
+      setIsFollowingPlayer(false);
       return id;
     });
-  }, []);
+  }, [radarZoom]);
 
   const toggleFollowPlayer = useCallback(() => {
     if (!selectedPlayerId) return;
@@ -651,105 +665,122 @@ export default function Page() {
     });
   }, [selectedPlayerId, radarZoom]);
 
+  // Zero-lag 120FPS Draggable Follow HUD with Window Pointer Tracking
   const handleFollowHudPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest("button") || (e.target as HTMLElement).closest("input")) return;
 
     e.preventDefault();
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {}
+    e.stopPropagation();
 
     const container = radarContainerRef.current;
-    let initialX = followHudPos?.x;
-    let initialY = followHudPos?.y;
+    let startPosX = followHudPos?.x;
+    let startPosY = followHudPos?.y;
 
-    if (initialX === undefined || initialY === undefined) {
+    if (startPosX === undefined || startPosY === undefined) {
       if (container) {
         const rect = container.getBoundingClientRect();
-        initialX = Math.max(16, (rect.width - 540) / 2);
-        initialY = Math.max(16, rect.height - 130);
+        startPosX = Math.max(16, (rect.width - 540) / 2);
+        startPosY = Math.max(16, rect.height - 130);
       } else {
-        initialX = 40;
-        initialY = 400;
+        startPosX = 40;
+        startPosY = 400;
       }
     }
 
-    followHudDragStartRef.current = {
-      startMouseX: e.clientX,
-      startMouseY: e.clientY,
-      startPosX: initialX,
-      startPosY: initialY,
-    };
+    const startClientX = e.clientX;
+    const startClientY = e.clientY;
     setIsDraggingFollowHud(true);
+
+    let rafId: number | null = null;
+    let latestClientX = startClientX;
+    let latestClientY = startClientY;
+
+    const onPointerMove = (ev: PointerEvent) => {
+      ev.preventDefault();
+      latestClientX = ev.clientX;
+      latestClientY = ev.clientY;
+
+      if (rafId === null) {
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          const dx = latestClientX - startClientX;
+          const dy = latestClientY - startClientY;
+
+          const cont = radarContainerRef.current;
+          const maxW = cont ? cont.clientWidth - 180 : window.innerWidth - 180;
+          const maxH = cont ? cont.clientHeight - 60 : window.innerHeight - 60;
+
+          const newX = Math.max(8, Math.min(maxW, startPosX + dx));
+          const newY = Math.max(8, Math.min(maxH, startPosY + dy));
+
+          setFollowHudPos({ x: newX, y: newY });
+        });
+      }
+    };
+
+    const onPointerUp = () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      setIsDraggingFollowHud(false);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
   }, [followHudPos]);
 
-  const handleFollowHudPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!followHudDragStartRef.current) return;
-    e.preventDefault();
-
-    const dx = e.clientX - followHudDragStartRef.current.startMouseX;
-    const dy = e.clientY - followHudDragStartRef.current.startMouseY;
-
-    const container = radarContainerRef.current;
-    const maxW = container ? container.clientWidth - 160 : window.innerWidth - 160;
-    const maxH = container ? container.clientHeight - 60 : window.innerHeight - 60;
-
-    const newX = Math.max(8, Math.min(maxW, followHudDragStartRef.current.startPosX + dx));
-    const newY = Math.max(8, Math.min(maxH, followHudDragStartRef.current.startPosY + dy));
-
-    setFollowHudPos({ x: newX, y: newY });
-  }, []);
-
-  const handleFollowHudPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    followHudDragStartRef.current = null;
-    setIsDraggingFollowHud(false);
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {}
-  }, []);
-
+  // Zero-lag 120FPS Draggable Fullscreen Roster with Window Pointer Tracking
   const handleRosterPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest("button")) return;
 
     e.preventDefault();
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {}
+    e.stopPropagation();
 
-    const currentX = rosterPos?.x ?? 16;
-    const currentY = rosterPos?.y ?? 64;
-
-    dragStartRef.current = {
-      startMouseX: e.clientX,
-      startMouseY: e.clientY,
-      startPosX: currentX,
-      startPosY: currentY,
-    };
+    const startPosX = rosterPos?.x ?? 16;
+    const startPosY = rosterPos?.y ?? 64;
+    const startClientX = e.clientX;
+    const startClientY = e.clientY;
     setIsDraggingRoster(true);
+
+    let rafId: number | null = null;
+    let latestClientX = startClientX;
+    let latestClientY = startClientY;
+
+    const onPointerMove = (ev: PointerEvent) => {
+      ev.preventDefault();
+      latestClientX = ev.clientX;
+      latestClientY = ev.clientY;
+
+      if (rafId === null) {
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          const dx = latestClientX - startClientX;
+          const dy = latestClientY - startClientY;
+
+          const newX = Math.max(8, Math.min(window.innerWidth - 300, startPosX + dx));
+          const newY = Math.max(8, Math.min(window.innerHeight - 100, startPosY + dy));
+
+          setRosterPos({ x: newX, y: newY });
+        });
+      }
+    };
+
+    const onPointerUp = () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      setIsDraggingRoster(false);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
   }, [rosterPos]);
-
-  const handleRosterPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragStartRef.current) return;
-    e.preventDefault();
-
-    const dx = e.clientX - dragStartRef.current.startMouseX;
-    const dy = e.clientY - dragStartRef.current.startMouseY;
-
-    const newX = Math.max(8, Math.min(window.innerWidth - 340, dragStartRef.current.startPosX + dx));
-    const newY = Math.max(8, Math.min(window.innerHeight - 120, dragStartRef.current.startPosY + dy));
-
-    setRosterPos({ x: newX, y: newY });
-  }, []);
-
-  const handleRosterPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    dragStartRef.current = null;
-    setIsDraggingRoster(false);
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {}
-  }, []);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2166,14 +2197,12 @@ export default function Page() {
                 /* Minimized Pill Badge (Draggable & Expandable) */
                 <div
                   onPointerDown={handleFollowHudPointerDown}
-                  onPointerMove={handleFollowHudPointerMove}
-                  onPointerUp={handleFollowHudPointerUp}
                   style={
                     followHudPos
                       ? { left: followHudPos.x, top: followHudPos.y, position: "absolute" }
                       : { bottom: 16, left: "50%", transform: "translateX(-50%)", position: "absolute" }
                   }
-                  className={`z-50 bg-[#0e111a]/95 backdrop-blur-xl border border-white/[0.1] rounded-xl px-3 py-1.5 shadow-2xl shadow-black/90 flex items-center gap-2 select-none animate-fade-in pointer-events-auto ${
+                  className={`z-50 bg-[#0e111a]/95 backdrop-blur-xl border border-white/[0.1] rounded-xl px-3 py-1.5 shadow-2xl shadow-black/90 flex items-center gap-2 select-none animate-fade-in pointer-events-auto touch-none ${
                     isDraggingFollowHud ? "cursor-grabbing" : "cursor-grab"
                   }`}
                 >
@@ -2231,9 +2260,7 @@ export default function Page() {
                   {/* Top Row: Header, Stats, Follow Toggle, Controls */}
                   <div
                     onPointerDown={handleFollowHudPointerDown}
-                    onPointerMove={handleFollowHudPointerMove}
-                    onPointerUp={handleFollowHudPointerUp}
-                    className={`flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap pb-1 border-b border-white/[0.06] ${
+                    className={`flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap pb-1 border-b border-white/[0.06] touch-none ${
                       isDraggingFollowHud ? "cursor-grabbing" : "cursor-grab"
                     }`}
                   >
@@ -2368,9 +2395,7 @@ export default function Page() {
                     {/* Draggable Header */}
                     <div
                       onPointerDown={handleRosterPointerDown}
-                      onPointerMove={handleRosterPointerMove}
-                      onPointerUp={handleRosterPointerUp}
-                      className={`flex items-center justify-between border-b border-white/[0.06] pb-1.5 shrink-0 select-none ${
+                      className={`flex items-center justify-between border-b border-white/[0.06] pb-1.5 shrink-0 select-none touch-none ${
                         isDraggingRoster ? "cursor-grabbing" : "cursor-grab"
                       }`}
                     >
