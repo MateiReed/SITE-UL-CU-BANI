@@ -1362,6 +1362,24 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       };
     }, [animate]);
 
+    // Canvas Resize & High-DPI Display Scaler
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ro = new ResizeObserver(() => {
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.min(window.devicePixelRatio || 1, 2.5); // Cap at 2.5x for ultra-high performance
+        const targetW = Math.floor(rect.width * dpr);
+        const targetH = Math.floor(rect.height * dpr);
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
+        }
+      });
+      ro.observe(canvas);
+      return () => ro.disconnect();
+    }, []);
+
     // Handle mouse drag / pan & click selection
     const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
       if (e.button !== 0) return;
@@ -1394,7 +1412,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         const dy = Math.abs(e.clientY - pointerDownInfoRef.current.y);
         const elapsed = Date.now() - pointerDownInfoRef.current.time;
 
-        if (dx < 12 && dy < 12 && elapsed < 550) {
+        if (dx < 14 && dy < 14 && elapsed < 550) {
           const canvas = canvasRef.current;
           if (canvas) {
             const rect = canvas.getBoundingClientRect();
@@ -1409,7 +1427,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
             const offsetY = (h - size) / 2 + panRef.current.y;
 
             let clickedPlayerId: string | null = null;
-            let minDistance = 32; // Generous 32px clickable hitbox
+            let minDistance = 34; // Generous 34px clickable hitbox
 
             stateRef.current.forEach((p) => {
               const cx = offsetX + p.rx * size;
@@ -1430,7 +1448,11 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       }
     };
 
-    // Canvas Mouse Wheel Zoom Listener (Non-passive to prevent page scroll)
+    // Canvas Native Wheel & Multi-Touch Gesture Handling (Pinch-to-Zoom, 1-Finger Pan, Touch-Tap)
+    const touchStartDistanceRef = useRef<number | null>(null);
+    const touchStartZoomRef = useRef<number>(radarZoom);
+    touchStartZoomRef.current = radarZoom;
+
     useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -1442,26 +1464,119 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         onZoomChange?.(Number(newZoom.toFixed(2)));
       };
 
+      const handleTouchStart = (e: TouchEvent) => {
+        if (e.touches.length === 1) {
+          isDraggingRef.current = true;
+          const touch = e.touches[0];
+          dragStartRef.current = {
+            x: touch.clientX - panRef.current.x,
+            y: touch.clientY - panRef.current.y,
+          };
+          pointerDownInfoRef.current = {
+            x: touch.clientX,
+            y: touch.clientY,
+            time: Date.now(),
+          };
+          touchStartDistanceRef.current = null;
+        } else if (e.touches.length === 2) {
+          isDraggingRef.current = false;
+          pointerDownInfoRef.current = null;
+          const dx = e.touches[0].clientX - e.touches[1].clientX;
+          const dy = e.touches[0].clientY - e.touches[1].clientY;
+          touchStartDistanceRef.current = Math.hypot(dx, dy);
+          touchStartZoomRef.current = radarZoom;
+        }
+      };
+
+      const handleTouchMove = (e: TouchEvent) => {
+        e.preventDefault(); // Prevent default mobile browser elastic scroll / gestures
+        if (e.touches.length === 1 && isDraggingRef.current) {
+          const touch = e.touches[0];
+          panRef.current = {
+            x: touch.clientX - dragStartRef.current.x,
+            y: touch.clientY - dragStartRef.current.y,
+          };
+        } else if (e.touches.length === 2 && touchStartDistanceRef.current !== null) {
+          const dx = e.touches[0].clientX - e.touches[1].clientX;
+          const dy = e.touches[0].clientY - e.touches[1].clientY;
+          const currentDistance = Math.hypot(dx, dy);
+          const factor = currentDistance / touchStartDistanceRef.current;
+          const newZoom = Math.max(0.6, Math.min(3.5, touchStartZoomRef.current * factor));
+          onZoomChange?.(Number(newZoom.toFixed(2)));
+        }
+      };
+
+      const handleTouchEnd = (e: TouchEvent) => {
+        if (e.touches.length === 0) {
+          isDraggingRef.current = false;
+          touchStartDistanceRef.current = null;
+
+          if (pointerDownInfoRef.current) {
+            const changedTouch = e.changedTouches[0];
+            if (changedTouch) {
+              const dx = Math.abs(changedTouch.clientX - pointerDownInfoRef.current.x);
+              const dy = Math.abs(changedTouch.clientY - pointerDownInfoRef.current.y);
+              const elapsed = Date.now() - pointerDownInfoRef.current.time;
+
+              // Generous tap hitbox for mobile fingers
+              if (dx < 18 && dy < 18 && elapsed < 450) {
+                const rect = canvas.getBoundingClientRect();
+                const clickX = changedTouch.clientX - rect.left;
+                const clickY = changedTouch.clientY - rect.top;
+
+                const w = rect.width;
+                const h = rect.height;
+                const baseSize = Math.min(w, h);
+                const size = baseSize * radarZoom;
+                const offsetX = (w - size) / 2 + panRef.current.x;
+                const offsetY = (h - size) / 2 + panRef.current.y;
+
+                let clickedPlayerId: string | null = null;
+                let minDistance = 42; // 42px touch hitbox for mobile thumbs
+
+                stateRef.current.forEach((p) => {
+                  const cx = offsetX + p.rx * size;
+                  const cy = offsetY + p.ry * size;
+                  const dist = Math.hypot(clickX - cx, clickY - cy);
+                  if (dist < minDistance) {
+                    minDistance = dist;
+                    clickedPlayerId = p.id;
+                  }
+                });
+
+                if (clickedPlayerId) {
+                  onSelectPlayer?.(clickedPlayerId);
+                }
+              }
+            }
+            pointerDownInfoRef.current = null;
+          }
+        } else if (e.touches.length === 1) {
+          // Switch back to single finger drag
+          isDraggingRef.current = true;
+          const touch = e.touches[0];
+          dragStartRef.current = {
+            x: touch.clientX - panRef.current.x,
+            y: touch.clientY - panRef.current.y,
+          };
+          touchStartDistanceRef.current = null;
+        }
+      };
+
       canvas.addEventListener("wheel", handleWheel, { passive: false });
+      canvas.addEventListener("touchstart", handleTouchStart, { passive: false });
+      canvas.addEventListener("touchmove", handleTouchMove, { passive: false });
+      canvas.addEventListener("touchend", handleTouchEnd, { passive: false });
+      canvas.addEventListener("touchcancel", handleTouchEnd, { passive: false });
+
       return () => {
         canvas.removeEventListener("wheel", handleWheel);
+        canvas.removeEventListener("touchstart", handleTouchStart);
+        canvas.removeEventListener("touchmove", handleTouchMove);
+        canvas.removeEventListener("touchend", handleTouchEnd);
+        canvas.removeEventListener("touchcancel", handleTouchEnd);
       };
-    }, [radarZoom, onZoomChange]);
-
-    useEffect(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ro = new ResizeObserver(() => {
-        const rect = canvas.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = Math.floor(rect.width * dpr);
-        canvas.height = Math.floor(rect.height * dpr);
-        const ctx = canvas.getContext("2d");
-        if (ctx) ctx.scale(dpr, dpr);
-      });
-      ro.observe(canvas);
-      return () => ro.disconnect();
-    }, []);
+    }, [radarZoom, onZoomChange, onSelectPlayer]);
 
     return (
       <canvas
@@ -1470,7 +1585,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        className="w-full h-full block cursor-grab active:cursor-grabbing"
+        className="w-full h-full block cursor-grab active:cursor-grabbing touch-none select-none"
         aria-label={`CS2 Radar Canvas – ${mapId}`}
       />
     );
@@ -1478,3 +1593,4 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
 );
 
 export default RadarCanvas;
+

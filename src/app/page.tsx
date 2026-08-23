@@ -44,6 +44,13 @@ import {
   X,
   ChevronUp,
   Eye,
+  RotateCw,
+  RotateCcw,
+  Menu,
+  Smartphone,
+  Plus,
+  Minus,
+  SlidersHorizontal,
 } from "lucide-react";
 import { MAPS, normalizeMapId } from "@/lib/mapData";
 import type { RadarPayload, ExecutorPayload, PlayerData } from "@/lib/radarStore";
@@ -580,6 +587,11 @@ export default function Page() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"players" | "settings">("players");
   const [sidebarTeamTab, setSidebarTeamTab] = useState<"T" | "CT">("T");
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [mobileLayersOpen, setMobileLayersOpen] = useState(false);
+  const [isLandscapeLocked, setIsLandscapeLocked] = useState(false);
+  const [isMobileDevice, setIsMobileDevice] = useState(false);
+
   const [fullscreenPlayersVisible, setFullscreenPlayersVisible] = useState(true);
   const [rosterPos, setRosterPos] = useState<{ x: number; y: number } | null>(null);
   const [isDraggingRoster, setIsDraggingRoster] = useState(false);
@@ -612,6 +624,11 @@ export default function Page() {
   const [radarZoom, setRadarZoom] = useState(1.0);
 
   const radarContainerRef = useRef<HTMLDivElement>(null);
+
+  const resetRadarView = useCallback(() => {
+    setRadarZoom(1.0);
+    setIsFollowingPlayer(false);
+  }, []);
 
   const handleSelectPlayer = useCallback((id: string | null) => {
     setSelectedPlayerId((prev) => {
@@ -742,6 +759,16 @@ export default function Page() {
 
   useEffect(() => {
     setMounted(true);
+    if (typeof window !== "undefined") {
+      const checkMobile = () => {
+        const isTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+        const isSmall = window.innerWidth < 1024;
+        setIsMobileDevice(isTouch || isSmall);
+      };
+      checkMobile();
+      window.addEventListener("resize", checkMobile);
+      return () => window.removeEventListener("resize", checkMobile);
+    }
   }, []);
 
   // Relative timestamp and idle status checker
@@ -765,33 +792,69 @@ export default function Page() {
   // Fullscreen change listener
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      const isNowFullscreen = !!document.fullscreenElement;
+      setIsFullscreen(isNowFullscreen);
+      if (!isNowFullscreen) {
+        setIsLandscapeLocked(false);
+        if (typeof window !== "undefined" && window.screen?.orientation && "unlock" in window.screen.orientation) {
+          try {
+            (window.screen.orientation as unknown as { unlock: () => void }).unlock();
+          } catch {}
+        }
+      }
     };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
     return () => {
-      document.removeEventListener(
-        "fullscreenchange",
-        handleFullscreenChange
-      );
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
     };
   }, []);
 
-  // Cinematic Fullscreen Toggle
-  const toggleFullscreen = useCallback(async () => {
+  // Cinematic Fullscreen & Mobile Landscape Orientation Locker
+  const toggleFullscreen = useCallback(async (lockLandscape: boolean | React.MouseEvent = false) => {
+    const shouldLock = lockLandscape === true;
     try {
       if (!document.fullscreenElement) {
-        if (radarContainerRef.current) {
-          await radarContainerRef.current.requestFullscreen();
-          setIsFullscreen(true);
+        const el = radarContainerRef.current || document.documentElement;
+        if (el.requestFullscreen) {
+          await el.requestFullscreen();
+        } else if ((el as unknown as { webkitRequestFullscreen: () => Promise<void> }).webkitRequestFullscreen) {
+          await (el as unknown as { webkitRequestFullscreen: () => Promise<void> }).webkitRequestFullscreen();
+        }
+        setIsFullscreen(true);
+
+        if (shouldLock && typeof window !== "undefined" && window.screen?.orientation && "lock" in window.screen.orientation) {
+          try {
+            await (window.screen.orientation as unknown as { lock: (type: string) => Promise<void> }).lock("landscape");
+            setIsLandscapeLocked(true);
+          } catch {
+            // Orientation lock may fail on devices without permission, fullscreen still works
+          }
         }
       } else {
-        await document.exitFullscreen();
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as unknown as { webkitExitFullscreen: () => Promise<void> }).webkitExitFullscreen) {
+          await (document as unknown as { webkitExitFullscreen: () => Promise<void> }).webkitExitFullscreen();
+        }
         setIsFullscreen(false);
+        setIsLandscapeLocked(false);
+
+        if (typeof window !== "undefined" && window.screen?.orientation && "unlock" in window.screen.orientation) {
+          try {
+            (window.screen.orientation as unknown as { unlock: () => void }).unlock();
+          } catch {}
+        }
       }
     } catch {
       setIsFullscreen((v) => !v);
     }
   }, []);
+
+  const toggleFullscreenLandscape = useCallback(() => {
+    toggleFullscreen(true);
+  }, [toggleFullscreen]);
 
   // Keyboard Shortcuts (QoL)
   useEffect(() => {
@@ -805,7 +868,10 @@ export default function Page() {
       const key = e.key.toLowerCase();
       if (key === "f") {
         e.preventDefault();
-        toggleFullscreen();
+        toggleFullscreen(false);
+      } else if (key === "l") {
+        e.preventDefault();
+        toggleFullscreen(true);
       } else if (key === "d") {
         e.preventDefault();
         setUseMock((v) => !v);
@@ -844,13 +910,20 @@ export default function Page() {
       } else if (key === "-" || key === "_") {
         e.preventDefault();
         setRadarZoom((z) => Math.max(0.6, Number((z - 0.2).toFixed(2))));
+      } else if (key === "0") {
+        e.preventDefault();
+        resetRadarView();
       } else if (key === "i") {
         e.preventDefault();
         setInspectorSize((s) =>
           s === "compact" ? "expanded" : s === "expanded" ? "modal" : "compact"
         );
       } else if (key === "escape") {
-        if (selectedPlayerId) {
+        if (mobileDrawerOpen) {
+          setMobileDrawerOpen(false);
+        } else if (mobileLayersOpen) {
+          setMobileLayersOpen(false);
+        } else if (selectedPlayerId) {
           handleSelectPlayer(null);
         } else if (inspectorSize === "modal") {
           setInspectorSize("expanded");
@@ -859,7 +932,7 @@ export default function Page() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleFullscreen, inspectorSize, selectedPlayerId, toggleFollowPlayer, handleSelectPlayer]);
+  }, [toggleFullscreen, inspectorSize, selectedPlayerId, toggleFollowPlayer, handleSelectPlayer, resetRadarView, mobileDrawerOpen, mobileLayersOpen]);
 
   const selectedMapRef = useRef(selectedMap);
   selectedMapRef.current = selectedMap;
@@ -1179,29 +1252,42 @@ export default function Page() {
 
       {/* ── Top Command Bar (Linear/Vercel Style) ── */}
       <header
-        className={`h-12 border-b border-white/[0.06] bg-[#0c0e14]/90 backdrop-blur-xl px-4 flex items-center justify-between gap-4 shrink-0 z-30 transition-all duration-300 ${
+        className={`h-12 border-b border-white/[0.06] bg-[#0c0e14]/90 backdrop-blur-xl px-3 sm:px-4 flex items-center justify-between gap-2 shrink-0 z-30 transition-all duration-300 ${
           isFullscreen ? "-translate-y-14 opacity-0 pointer-events-none" : "translate-y-0 opacity-100"
         }`}
       >
-        {/* Left Branding */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-mono font-black text-[11px] text-white shadow-sm shadow-cyan-500/20 border border-white/20">
+        {/* Left Branding & Mobile Menu Trigger */}
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          {/* Mobile Drawer Trigger Button */}
+          <button
+            onClick={() => setMobileDrawerOpen(true)}
+            className="lg:hidden p-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] active:scale-95 border border-white/[0.08] text-slate-300 hover:text-white flex items-center gap-1.5 min-h-[38px] transition-all"
+            title="Open Mobile Roster & Settings Drawer"
+            aria-label="Open Mobile Drawer"
+          >
+            <Menu className="w-4 h-4 text-cyan-400 shrink-0" />
+            <span className="text-xs font-mono font-bold text-slate-200">
+              {tAlive + ctAlive} ALIVE
+            </span>
+          </button>
+
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-mono font-black text-[11px] text-white shadow-sm shadow-cyan-500/20 border border-white/20 shrink-0">
               CS2
             </div>
-            <div>
+            <div className="truncate hidden xs:block">
               <div className="flex items-center gap-1.5 leading-none">
-                <span className="text-xs font-mono font-bold tracking-wider uppercase text-white">
+                <span className="text-xs font-mono font-bold tracking-wider uppercase text-white truncate">
                   TACTICAL RADAR
                 </span>
-                <span className="text-[9px] text-cyan-400 font-mono font-semibold px-1.5 py-0.2 rounded bg-cyan-500/10 border border-cyan-500/20">
+                <span className="text-[9px] text-cyan-400 font-mono font-semibold px-1.5 py-0.2 rounded bg-cyan-500/10 border border-cyan-500/20 shrink-0">
                   PRO
                 </span>
               </div>
             </div>
           </div>
 
-          <div className="h-4 w-px bg-white/[0.08] hidden sm:block" />
+          <div className="h-4 w-px bg-white/[0.08] hidden md:block" />
 
           {/* Current Map Chip */}
           <div className="hidden sm:flex items-center gap-1.5 text-xs font-mono bg-white/[0.03] px-2.5 py-1 rounded-md border border-white/[0.05]">
@@ -1214,8 +1300,8 @@ export default function Page() {
           </div>
         </div>
 
-        {/* Center: Stream Protocol Toggle + Match Health Status */}
-        <div className="flex items-center gap-4">
+        {/* Center: Stream Protocol Toggle + Match Health Status (Desktop) */}
+        <div className="hidden lg:flex items-center gap-4">
           {/* Protocol Toggle */}
           <div className="flex items-center bg-black/40 border border-white/[0.08] p-0.5 rounded-lg">
             <button
@@ -1245,7 +1331,7 @@ export default function Page() {
           </div>
 
           {/* Match Roster Balance Indicator */}
-          <div className="hidden lg:flex items-center gap-3 bg-black/30 border border-white/[0.06] px-3 py-1 rounded-lg">
+          <div className="flex items-center gap-3 bg-black/30 border border-white/[0.06] px-3 py-1 rounded-lg">
             {/* T Side */}
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
@@ -1275,10 +1361,10 @@ export default function Page() {
         </div>
 
         {/* Right Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Status Indicator */}
           <div
-            className={`flex items-center gap-1.5 border rounded-lg px-2.5 py-1 text-[11px] font-mono font-medium transition-all ${badgeConfig.bg}`}
+            className={`hidden sm:flex items-center gap-1.5 border rounded-lg px-2.5 py-1 text-[11px] font-mono font-medium transition-all ${badgeConfig.bg}`}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${badgeConfig.dot}`} />
             <span className="truncate">{badgeConfig.label}</span>
@@ -1309,47 +1395,302 @@ export default function Page() {
                 return !v;
               });
             }}
-            className={`p-1.5 rounded-lg border text-xs font-mono transition-colors ${
+            className={`p-2 rounded-lg border text-xs font-mono transition-all active:scale-95 min-h-[38px] flex items-center justify-center ${
               audioEnabled
                 ? "bg-cyan-500/15 border-cyan-500/40 text-cyan-300"
                 : "bg-white/[0.03] border-white/[0.06] text-slate-400 hover:text-slate-200 hover:border-white/[0.12]"
             }`}
             title="Toggle Radar Audio Ping (Key: M)"
+            aria-label="Toggle Audio"
           >
-            {audioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+            {audioEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
 
           {/* Demo Simulator Toggle */}
           <button
             onClick={() => setUseMock((v) => !v)}
-            className={`text-xs font-mono font-medium px-2.5 py-1 rounded-lg border transition-all flex items-center gap-1.5 ${
+            className={`text-xs font-mono font-medium px-2.5 py-1.5 rounded-lg border transition-all active:scale-95 flex items-center gap-1.5 min-h-[38px] ${
               useMock
                 ? "bg-amber-500/15 border-amber-500/40 text-amber-300 shadow-sm"
                 : "bg-white/[0.03] border-white/[0.06] text-slate-400 hover:text-slate-200 hover:border-white/[0.12]"
             }`}
             title="Toggle Live Demo Simulator (Key: D)"
+            aria-label="Toggle Demo Simulation"
           >
-            {useMock ? <Pause className="w-3 h-3 text-amber-400" /> : <Play className="w-3 h-3 text-slate-400" />}
+            {useMock ? <Pause className="w-3.5 h-3.5 text-amber-400" /> : <Play className="w-3.5 h-3.5 text-slate-400" />}
             <span className="hidden sm:inline">{useMock ? "SIMULATOR ON" : "DEMO SIM"}</span>
           </button>
 
-          {/* Fullscreen Button */}
+          {/* Landscape Fullscreen Quick Button */}
           <button
-            onClick={toggleFullscreen}
-            className="flex items-center gap-1.5 bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.06] hover:border-white/[0.15] text-slate-300 hover:text-white text-xs font-mono font-medium px-2.5 py-1 rounded-lg transition-all"
-            title="Toggle Cinematic Fullscreen (Key: F)"
+            onClick={toggleFullscreenLandscape}
+            className="flex items-center gap-1.5 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 hover:from-cyan-500/30 hover:to-blue-500/30 border border-cyan-500/40 text-cyan-300 text-xs font-mono font-bold px-2.5 sm:px-3 py-1.5 rounded-lg transition-all active:scale-95 min-h-[38px] shadow-sm"
+            title="Rotate & Open Fullscreen Landscape (Key: L)"
+            aria-label="Fullscreen Landscape"
           >
-            <Maximize2 className="w-3 h-3 text-cyan-400" />
+            <Smartphone className="w-3.5 h-3.5 rotate-90 text-cyan-400" />
+            <span className="hidden sm:inline">LANDSCAPE</span>
+          </button>
+
+          {/* Regular Fullscreen Button */}
+          <button
+            onClick={() => toggleFullscreen(false)}
+            className="hidden sm:flex items-center gap-1.5 bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.06] hover:border-white/[0.15] text-slate-300 hover:text-white text-xs font-mono font-medium px-2.5 py-1.5 rounded-lg transition-all active:scale-95 min-h-[38px]"
+            title="Toggle Fullscreen (Key: F)"
+            aria-label="Toggle Fullscreen"
+          >
+            <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
             <span className="hidden md:inline">FULLSCREEN</span>
           </button>
         </div>
       </header>
 
+      {/* ── Mobile Slide-in Drawer (Roster & Settings) ── */}
+      {mobileDrawerOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden flex">
+          {/* Backdrop */}
+          <div
+            onClick={() => setMobileDrawerOpen(false)}
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm animate-fade-in transition-opacity"
+          />
+
+          {/* Drawer Body */}
+          <div className="relative w-[85%] max-w-sm bg-[#0c0e14]/98 border-r border-white/[0.1] h-full flex flex-col z-10 shadow-2xl animate-slide-up overflow-hidden">
+            {/* Drawer Header */}
+            <div className="p-3 border-b border-white/[0.08] flex items-center justify-between bg-black/40">
+              <div className="flex items-center gap-2">
+                <div className="h-6 w-6 rounded-md bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-mono font-bold text-xs">
+                  CS2
+                </div>
+                <div>
+                  <div className="text-xs font-mono font-bold text-white uppercase">COMMAND MENU</div>
+                  <div className="text-[10px] font-mono text-cyan-400">{tAlive + ctAlive} PLAYERS ALIVE</div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setMobileDrawerOpen(false)}
+                className="p-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-white/[0.08] active:scale-95"
+                aria-label="Close Mobile Drawer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Drawer Navigation Tabs */}
+            <div className="p-2 border-b border-white/[0.06] bg-black/20 grid grid-cols-2 gap-1.5">
+              <button
+                onClick={() => setSidebarTab("players")}
+                className={`py-2 px-3 rounded-lg text-xs font-mono font-bold transition-all flex items-center justify-center gap-2 border ${
+                  sidebarTab === "players"
+                    ? "bg-[#181c28] text-cyan-300 border-cyan-500/40 shadow-sm"
+                    : "bg-black/30 border-white/[0.04] text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>ROSTER ({payload?.players.length ?? 0})</span>
+              </button>
+              <button
+                onClick={() => setSidebarTab("settings")}
+                className={`py-2 px-3 rounded-lg text-xs font-mono font-bold transition-all flex items-center justify-center gap-2 border ${
+                  sidebarTab === "settings"
+                    ? "bg-[#181c28] text-cyan-300 border-cyan-500/40 shadow-sm"
+                    : "bg-black/30 border-white/[0.04] text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>MAPS & PREFS</span>
+              </button>
+            </div>
+
+            {/* Drawer Content */}
+            <div className="flex-1 overflow-y-auto p-2.5 space-y-3">
+              {sidebarTab === "players" ? (
+                <div className="space-y-3">
+                  {/* Team Filter Segmented Switch */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      onClick={() => setSidebarTeamTab("T")}
+                      className={`py-2 px-2.5 rounded-xl text-xs font-mono font-bold transition-all flex items-center justify-between border ${
+                        sidebarTeamTab === "T"
+                          ? "bg-amber-500/20 border-amber-500/50 text-amber-300 shadow-sm"
+                          : "bg-black/30 border-white/[0.04] text-slate-400"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-400" />
+                        <span>TERRORISTS</span>
+                      </div>
+                      <span className="text-[11px] font-bold opacity-90">{tAlive}/{tPlayers.length}</span>
+                    </button>
+
+                    <button
+                      onClick={() => setSidebarTeamTab("CT")}
+                      className={`py-2 px-2.5 rounded-xl text-xs font-mono font-bold transition-all flex items-center justify-between border ${
+                        sidebarTeamTab === "CT"
+                          ? "bg-cyan-500/20 border-cyan-500/50 text-cyan-300 shadow-sm"
+                          : "bg-black/30 border-white/[0.04] text-slate-400"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                        <span>COUNTER-T</span>
+                      </div>
+                      <span className="text-[11px] font-bold opacity-90">{ctAlive}/{ctPlayers.length}</span>
+                    </button>
+                  </div>
+
+                  {/* Player Cards */}
+                  <div className="space-y-2">
+                    {sidebarTeamTab === "T" ? (
+                      tPlayers.length > 0 ? (
+                        tPlayers.map((p) => (
+                          <PlayerCard
+                            key={p.id}
+                            player={p}
+                            isFocused={selectedPlayerId === p.id}
+                            isFollowing={selectedPlayerId === p.id && isFollowingPlayer}
+                            onSelect={() => {
+                              handleSelectPlayer(p.id);
+                              setMobileDrawerOpen(false);
+                            }}
+                            onToggleFollow={toggleFollowPlayer}
+                          />
+                        ))
+                      ) : (
+                        <div className="p-8 text-center text-slate-500 font-mono text-xs">
+                          No Terrorists registered.
+                        </div>
+                      )
+                    ) : ctPlayers.length > 0 ? (
+                      ctPlayers.map((p) => (
+                        <PlayerCard
+                          key={p.id}
+                          player={p}
+                          isFocused={selectedPlayerId === p.id}
+                          isFollowing={selectedPlayerId === p.id && isFollowingPlayer}
+                          onSelect={() => {
+                            handleSelectPlayer(p.id);
+                            setMobileDrawerOpen(false);
+                          }}
+                          onToggleFollow={toggleFollowPlayer}
+                        />
+                      ))
+                    ) : (
+                      <div className="p-8 text-center text-slate-500 font-mono text-xs">
+                        No Counter-Terrorists registered.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                /* Mobile Maps & Settings */
+                <div className="space-y-4">
+                  {/* Map Selector */}
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-mono font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                      <span>COMPETITIVE MAP POOL</span>
+                      <span className="text-[10px] text-cyan-400 font-bold">{MAPS.length} MAPS</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {MAPS.map((m) => {
+                        const isSelected = selectedMap === m.id;
+                        return (
+                          <button
+                            key={m.id}
+                            onClick={() => {
+                              handleMapChange(m.id);
+                              setMobileDrawerOpen(false);
+                            }}
+                            className={`text-left p-2.5 rounded-xl text-xs font-mono transition-all flex items-center justify-between border truncate active:scale-95 ${
+                              isSelected
+                                ? "bg-cyan-500/20 border-cyan-500/60 text-cyan-300 font-bold shadow-md"
+                                : "border-white/[0.06] bg-black/30 text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <span
+                                className="w-2 h-2 rounded-full shrink-0"
+                                style={{ backgroundColor: m.accent }}
+                              />
+                              <span className="truncate">{m.displayName}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* HUD Preferences */}
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-mono font-bold text-slate-400 uppercase tracking-wider">
+                      RADAR HUD PREFERENCES
+                    </div>
+                    <div className="space-y-1.5">
+                      <ToggleSwitch
+                        label="Player Names"
+                        checked={showNames}
+                        onChange={setShowNames}
+                        icon={<Users className="w-3.5 h-3.5" />}
+                      />
+                      <ToggleSwitch
+                        label="FOV Vision Cones"
+                        checked={showVisionCones}
+                        onChange={setShowVisionCones}
+                        icon={<Eye className="w-3.5 h-3.5" />}
+                      />
+                      <ToggleSwitch
+                        label="Active Smokes"
+                        checked={showSmokes}
+                        onChange={setShowSmokes}
+                        icon={<Wind className="w-3.5 h-3.5" />}
+                      />
+                      <ToggleSwitch
+                        label="Active Molotovs"
+                        checked={showMolotovs}
+                        onChange={setShowMolotovs}
+                        icon={<Flame className="w-3.5 h-3.5" />}
+                      />
+                      <ToggleSwitch
+                        label="Dropped Weapons"
+                        checked={showGuns}
+                        onChange={setShowGuns}
+                        icon={<Layers className="w-3.5 h-3.5" />}
+                      />
+                      <ToggleSwitch
+                        label="Tactical Reticle"
+                        checked={showGrid}
+                        onChange={setShowGrid}
+                        icon={<Grid className="w-3.5 h-3.5" />}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Landscape Mode Button in Drawer */}
+                  <div className="pt-2">
+                    <button
+                      onClick={() => {
+                        setMobileDrawerOpen(false);
+                        toggleFullscreenLandscape();
+                      }}
+                      className="w-full py-2.5 px-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-mono font-bold text-xs rounded-xl shadow-lg shadow-cyan-500/20 flex items-center justify-center gap-2 active:scale-95"
+                    >
+                      <Smartphone className="w-4 h-4 rotate-90" />
+                      <span>START LANDSCAPE FULLSCREEN</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Main Workspace ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden relative">
-        {/* ── Left Tactical Ops Sidebar ── */}
+        {/* ── Left Tactical Ops Sidebar (Desktop) ── */}
         <aside
-          className={`shrink-0 bg-[#0c0e14]/90 backdrop-blur-xl border-r border-white/[0.06] flex flex-col transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          className={`shrink-0 bg-[#0c0e14]/90 backdrop-blur-xl border-r border-white/[0.06] hidden lg:flex flex-col transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
             isFullscreen
               ? "-translate-x-full opacity-0 pointer-events-none w-0"
               : sidebarCollapsed
@@ -1610,7 +1951,7 @@ export default function Page() {
         {/* ── Main Radar Canvas & Inspector Deck ── */}
         <main
           className={`flex-1 flex flex-col min-w-0 min-h-0 transition-all duration-300 ${
-            isFullscreen ? "p-0 gap-0" : "p-3 gap-3"
+            isFullscreen ? "p-0 gap-0" : "p-2 sm:p-3 gap-2 sm:gap-3"
           }`}
         >
           {/* Radar Viewport */}
@@ -1619,7 +1960,7 @@ export default function Page() {
             className={`flex-1 min-h-0 bg-[#06080e] overflow-hidden relative flex items-center justify-center transition-all duration-300 ${
               isFullscreen
                 ? "h-screen w-screen !border-0 !rounded-none"
-                : "rounded-2xl border border-white/[0.07] shadow-2xl"
+                : "rounded-xl sm:rounded-2xl border border-white/[0.07] shadow-2xl"
             }`}
           >
             <RadarCanvas
@@ -1640,8 +1981,8 @@ export default function Page() {
             />
 
             {/* Top-Left Tactical Badge */}
-            <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none z-10">
-              <div className="bg-[#0e1017]/85 backdrop-blur-md border border-white/[0.08] rounded-lg px-3 py-1 flex items-center gap-2 shadow-lg">
+            <div className="absolute top-2.5 left-2.5 sm:top-3 sm:left-3 flex items-center gap-2 pointer-events-none z-10">
+              <div className="bg-[#0e1017]/85 backdrop-blur-md border border-white/[0.08] rounded-lg px-2.5 sm:px-3 py-1 flex items-center gap-2 shadow-lg">
                 <span
                   className="w-2 h-2 rounded-full shadow-sm"
                   style={{ backgroundColor: currentMap.accent }}
@@ -1649,7 +1990,7 @@ export default function Page() {
                 <span className="text-xs font-mono font-bold uppercase text-white">
                   {currentMap.displayName}
                 </span>
-                <span className="text-[10px] font-mono text-slate-500">
+                <span className="text-[10px] font-mono text-slate-500 hidden xs:inline">
                   {currentMap.id}
                 </span>
               </div>
@@ -1673,14 +2014,148 @@ export default function Page() {
               </div>
 
               {isFullscreen && (
-                <div className="bg-[#0e1017]/85 backdrop-blur-md border border-white/[0.08] rounded-lg px-3 py-1 flex items-center gap-2.5 text-xs font-mono shadow-lg">
+                <div className="bg-[#0e1017]/85 backdrop-blur-md border border-white/[0.08] rounded-lg px-2.5 sm:px-3 py-1 flex items-center gap-2 text-xs font-mono shadow-lg">
                   <span className="text-amber-400 font-semibold">{tAlive} T</span>
                   <span className="text-slate-600">vs</span>
                   <span className="text-cyan-400 font-semibold">{ctAlive} CT</span>
-                  <span className="text-emerald-400 font-semibold">{fps} FPS</span>
+                  <span className="text-emerald-400 font-semibold hidden sm:inline">{fps} FPS</span>
                 </div>
               )}
             </div>
+
+            {/* ── Floating Mobile / Fullscreen Quick Controls Bar ── */}
+            <div className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 z-40 flex items-center gap-1.5 bg-[#0e111a]/90 backdrop-blur-xl border border-white/[0.1] p-1.5 rounded-2xl shadow-2xl pointer-events-auto">
+              {/* Zoom Out Button */}
+              <button
+                onClick={() => setRadarZoom((z) => Math.max(0.6, Number((z - 0.2).toFixed(2))))}
+                className="w-9 h-9 rounded-xl bg-black/40 hover:bg-slate-800 active:scale-90 border border-white/[0.06] text-slate-200 hover:text-white flex items-center justify-center transition-all"
+                title="Zoom Out (-)"
+                aria-label="Zoom Out"
+              >
+                <Minus className="w-4 h-4" />
+              </button>
+
+              {/* Reset View Button */}
+              <button
+                onClick={resetRadarView}
+                className="h-9 px-2.5 rounded-xl bg-black/40 hover:bg-slate-800 active:scale-90 border border-white/[0.06] text-cyan-300 hover:text-white text-xs font-mono font-bold flex items-center justify-center gap-1 transition-all"
+                title="Reset View (1.0x)"
+                aria-label="Reset View"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{radarZoom.toFixed(1)}x</span>
+              </button>
+
+              {/* Zoom In Button */}
+              <button
+                onClick={() => setRadarZoom((z) => Math.min(3.5, Number((z + 0.2).toFixed(2))))}
+                className="w-9 h-9 rounded-xl bg-black/40 hover:bg-slate-800 active:scale-90 border border-white/[0.06] text-slate-200 hover:text-white flex items-center justify-center transition-all"
+                title="Zoom In (+)"
+                aria-label="Zoom In"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+
+              {/* Layers Quick Toggle */}
+              <button
+                onClick={() => setMobileLayersOpen((v) => !v)}
+                className={`h-9 px-2.5 rounded-xl border text-xs font-mono font-semibold flex items-center justify-center gap-1 transition-all active:scale-90 ${
+                  mobileLayersOpen
+                    ? "bg-cyan-500/25 border-cyan-500/60 text-cyan-200 shadow-md"
+                    : "bg-black/40 border-white/[0.06] text-slate-300 hover:text-white"
+                }`}
+                title="Toggle Tactical Radar Layers"
+                aria-label="Toggle Layers"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="hidden sm:inline">LAYERS</span>
+              </button>
+
+              {/* Mobile Drawer Trigger in Bar */}
+              <button
+                onClick={() => setMobileDrawerOpen(true)}
+                className="lg:hidden h-9 px-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-xs font-mono font-bold flex items-center justify-center gap-1 transition-all active:scale-90"
+                title="Open Roster & Maps Menu"
+                aria-label="Open Roster Menu"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>{tAlive + ctAlive}</span>
+              </button>
+
+              {/* Landscape Fullscreen Quick Switcher */}
+              <button
+                onClick={toggleFullscreenLandscape}
+                className="h-9 px-2.5 rounded-xl bg-gradient-to-r from-cyan-500/20 to-blue-500/20 hover:from-cyan-500/30 hover:to-blue-500/30 border border-cyan-500/40 text-cyan-200 text-xs font-mono font-bold flex items-center justify-center gap-1 transition-all active:scale-90"
+                title="Toggle Landscape Fullscreen Mode"
+                aria-label="Landscape Fullscreen"
+              >
+                <Smartphone className="w-3.5 h-3.5 rotate-90 text-cyan-400" />
+                <span className="hidden sm:inline">LANDSCAPE</span>
+              </button>
+            </div>
+
+            {/* ── Quick Tactical Layers Popover Modal ── */}
+            {mobileLayersOpen && (
+              <div className="absolute bottom-16 right-3 sm:bottom-18 sm:right-4 z-40 w-64 bg-[#0e111a]/95 backdrop-blur-2xl border border-white/[0.1] p-3 rounded-2xl shadow-2xl space-y-2 animate-slide-up pointer-events-auto">
+                <div className="flex items-center justify-between border-b border-white/[0.08] pb-1.5">
+                  <span className="text-xs font-mono font-bold text-slate-200 uppercase flex items-center gap-1.5">
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>TACTICAL LAYERS</span>
+                  </span>
+                  <button
+                    onClick={() => setMobileLayersOpen(false)}
+                    className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+
+                <div className="space-y-1">
+                  <ToggleSwitch
+                    label="Player Names"
+                    shortcut="N"
+                    checked={showNames}
+                    onChange={setShowNames}
+                    icon={<Users className="w-3.5 h-3.5" />}
+                  />
+                  <ToggleSwitch
+                    label="FOV Cones"
+                    shortcut="V"
+                    checked={showVisionCones}
+                    onChange={setShowVisionCones}
+                    icon={<Eye className="w-3.5 h-3.5" />}
+                  />
+                  <ToggleSwitch
+                    label="Smokes"
+                    shortcut="S"
+                    checked={showSmokes}
+                    onChange={setShowSmokes}
+                    icon={<Wind className="w-3.5 h-3.5" />}
+                  />
+                  <ToggleSwitch
+                    label="Molotovs"
+                    shortcut="K"
+                    checked={showMolotovs}
+                    onChange={setShowMolotovs}
+                    icon={<Flame className="w-3.5 h-3.5" />}
+                  />
+                  <ToggleSwitch
+                    label="Dropped Guns"
+                    shortcut="U"
+                    checked={showGuns}
+                    onChange={setShowGuns}
+                    icon={<Layers className="w-3.5 h-3.5" />}
+                  />
+                  <ToggleSwitch
+                    label="Tactical Grid"
+                    shortcut="G"
+                    checked={showGrid}
+                    onChange={setShowGrid}
+                    icon={<Grid className="w-3.5 h-3.5" />}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* ── Focused Player Floating Tactical HUD & Follow Controller ── */}
             {selectedPlayer && (

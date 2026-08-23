@@ -16,11 +16,24 @@
     --accent-amber: #f59e0b;
     --accent-emerald: #10b981;
     --accent-rose: #f43f5e;
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
   }
 
   * {
     border-color: rgba(255, 255, 255, 0.07);
     box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html, body {
+    height: 100%;
+    width: 100%;
+    position: fixed;
+    overflow: hidden;
+    touch-action: manipulation;
   }
 
   body {
@@ -30,6 +43,12 @@
     overflow: hidden;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  button, a, input, select {
+    touch-action: manipulation;
   }
 
   /* Precision Scrollbar */
