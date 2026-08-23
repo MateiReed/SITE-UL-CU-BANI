@@ -823,6 +823,7 @@ export default function Page() {
           await (el as unknown as { webkitRequestFullscreen: () => Promise<void> }).webkitRequestFullscreen();
         }
         setIsFullscreen(true);
+        resetRadarView();
 
         if (shouldLock && typeof window !== "undefined" && window.screen?.orientation && "lock" in window.screen.orientation) {
           try {
@@ -840,6 +841,7 @@ export default function Page() {
         }
         setIsFullscreen(false);
         setIsLandscapeLocked(false);
+        resetRadarView();
 
         if (typeof window !== "undefined" && window.screen?.orientation && "unlock" in window.screen.orientation) {
           try {
@@ -849,8 +851,9 @@ export default function Page() {
       }
     } catch {
       setIsFullscreen((v) => !v);
+      resetRadarView();
     }
-  }, []);
+  }, [resetRadarView]);
 
   const toggleFullscreenLandscape = useCallback(() => {
     toggleFullscreen(true);

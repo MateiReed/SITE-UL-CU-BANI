@@ -1163,19 +1163,54 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       }
     }
 
+    // Auto-center pan when map changes or screen rotates
+    useEffect(() => {
+      panRef.current = { x: 0, y: 0 };
+    }, [mapId]);
+
+    useEffect(() => {
+      const handleResize = () => {
+        if (!isFollowingPlayer) {
+          panRef.current = { x: 0, y: 0 };
+        }
+      };
+      window.addEventListener("resize", handleResize);
+      window.addEventListener("orientationchange", handleResize);
+      return () => {
+        window.removeEventListener("resize", handleResize);
+        window.removeEventListener("orientationchange", handleResize);
+      };
+    }, [isFollowingPlayer]);
+
     const animate = useCallback(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", { alpha: false });
       if (!ctx) return;
 
       const rect = canvas.getBoundingClientRect();
-      const w = rect.width || canvas.width;
-      const h = rect.height || canvas.height;
+      const w = rect.width;
+      const h = rect.height;
+      if (w <= 0 || h <= 0) return;
+
+      const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+      const targetBufferW = Math.floor(w * dpr);
+      const targetBufferH = Math.floor(h * dpr);
+
+      // Keep canvas resolution synced to display pixel ratio
+      if (canvas.width !== targetBufferW || canvas.height !== targetBufferH) {
+        canvas.width = targetBufferW;
+        canvas.height = targetBufferH;
+      }
+
+      // CRITICAL: Set DPI transform every single frame so clearRect and all drawing use logical CSS pixels
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
       const currentActiveMap = activeMapRef.current || normalizeMapId(mapId);
       const mapInfo = getMapInfo(currentActiveMap);
 
-      // Base square size that fits in viewport
+      // Responsive map dimension fitting:
+      // In landscape (w > h), fitting to h gives a generous square centered horizontally.
       const baseSize = Math.min(w, h);
       const size = baseSize * radarZoom;
 
@@ -1209,10 +1244,11 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
         }
       }
 
-      // Center offset + user pan offset
+      // Center offset + user pan offset (Guaranteed pixel-perfect centering)
       const offsetX = (w - size) / 2 + panRef.current.x;
       const offsetY = (h - size) / 2 + panRef.current.y;
 
+      // Wipe 100% of the canvas with solid background (no ghost duplicates)
       ctx.clearRect(0, 0, w, h);
       drawMapBackground(
         ctx,
@@ -1368,7 +1404,7 @@ const RadarCanvas = forwardRef<RadarCanvasHandle, RadarCanvasProps>(
       if (!canvas) return;
       const ro = new ResizeObserver(() => {
         const rect = canvas.getBoundingClientRect();
-        const dpr = Math.min(window.devicePixelRatio || 1, 2.5); // Cap at 2.5x for ultra-high performance
+        const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
         const targetW = Math.floor(rect.width * dpr);
         const targetH = Math.floor(rect.height * dpr);
         if (canvas.width !== targetW || canvas.height !== targetH) {
