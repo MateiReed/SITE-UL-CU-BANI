@@ -97,6 +97,18 @@ export const MAPS: MapInfo[] = [
     tag: "Active Duty",
   },
   {
+    id: "de_cache",
+    name: "de_cache",
+    displayName: "Cache",
+    image: "/radare/de_cache_radar.png",
+    pos_x: -2000,
+    pos_y: 3250,
+    scale: 5.5,
+    zMid: 0,
+    accent: "#22c55e",
+    tag: "Reserve",
+  },
+  {
     id: "de_overpass",
     name: "de_overpass",
     displayName: "Overpass",

@@ -126,6 +126,7 @@ function preloadRadarImages() {
       img.src = map.image;
       img.onload = () => {
         imageCache.set(map.id, img);
+        cachedBgKey = "";
       };
     }
   });
