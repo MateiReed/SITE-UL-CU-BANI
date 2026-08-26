@@ -55,14 +55,12 @@ import {
 import { MAPS, normalizeMapId } from "@/lib/mapData";
 import type { RadarPayload, ExecutorPayload, PlayerData } from "@/lib/radarStore";
 import { transformExecutorPayload } from "@/lib/radarStore";
-
-const RadarCanvas = dynamic(() => import("@/components/RadarCanvas"), {
-  ssr: false,
-});
+import type { RadarCanvasHandle } from "@/components/RadarCanvas";
+import RadarCanvas from "@/components/RadarCanvas";
 
 export type StreamMode = "websocket" | "http";
 type ConnectionStatus = "live" | "awaiting" | "connecting" | "offline";
-type InspectorSize = "compact" | "expanded" | "modal";
+type InspectorSize = "hidden" | "compact" | "expanded" | "modal";
 
 function getWeaponBadgeStyle(name?: string) {
   if (!name) return { bg: "bg-slate-900/80", text: "text-slate-400", border: "border-slate-800" };
@@ -82,7 +80,7 @@ function getWeaponBadgeStyle(name?: string) {
   return { bg: "bg-slate-900/80", text: "text-slate-300", border: "border-slate-800" };
 }
 
-function PlayerCard({
+const PlayerCard = React.memo(function PlayerCard({
   player,
   isFocused,
   isFollowing = false,
@@ -257,7 +255,8 @@ function PlayerCard({
       </div>
     </div>
   );
-}
+});
+
 
 // ─── Sound System (Synthesized Web Audio API) ──────────────────────────────
 class SoundFX {
@@ -481,7 +480,7 @@ function ToggleSwitch({
 }
 
 // ─── Syntax Highlighted JSON Viewer ─────────────────────────────────────────
-function HighlightedJson({
+const HighlightedJson = React.memo(function HighlightedJson({
   data,
   searchTerm = "",
 }: {
@@ -552,13 +551,24 @@ function HighlightedJson({
       {renderedLines}
     </div>
   );
-}
+});
 
 export default function Page() {
+  const radarCanvasRef = useRef<RadarCanvasHandle>(null);
+  const latestPayloadRef = useRef<RadarPayload | null>(null);
+  const latestRawRef = useRef<unknown>(null);
+  const activeTabRef = useRef<"players" | "utils" | "raw" | "api" | "shortcuts">("players");
+  const isFullscreenRef = useRef(false);
+  const inspectorSizeRef = useRef<InspectorSize>("compact");
+
   const [mounted, setMounted] = useState(false);
   const [selectedMap, setSelectedMap] = useState("de_dust2");
   const [payload, setPayload] = useState<RadarPayload | null>(null);
   const [rawPayload, setRawPayload] = useState<unknown>(null);
+
+  // ── Performance & Zero In-Game FPS Drop Controls ──────────────────
+  const [fpsCap, setFpsCap] = useState<number>(60);
+  const [performanceMode, setPerformanceMode] = useState<boolean>(true);
 
   // ── Protocol Mode Selector (Default: WebSocket) ───────────────────
   const [streamMode, setStreamMode] = useState<StreamMode>("websocket");
@@ -569,11 +579,15 @@ export default function Page() {
   const [useMock, setUseMock] = useState(false);
   const [mockTick, setMockTick] = useState(0);
 
-  // Inspector & UI Controls
+  // Inspector & UI Controls (Hidden by default to save 100% CPU/DOM resources)
   const [activeTab, setActiveTab] = useState<
     "players" | "utils" | "raw" | "api" | "shortcuts"
   >("players");
-  const [inspectorSize, setInspectorSize] = useState<InspectorSize>("compact");
+  activeTabRef.current = activeTab;
+
+  const [inspectorSize, setInspectorSize] = useState<InspectorSize>("hidden");
+  inspectorSizeRef.current = inspectorSize;
+
   const [jsonSearchQuery, setJsonSearchQuery] = useState("");
   const [packetCount, setPacketCount] = useState(0);
   const [lastPacketTime, setLastPacketTime] = useState<string>("--");
@@ -615,6 +629,7 @@ export default function Page() {
 
   // Canvas Viewport Controls
   const [isFullscreen, setIsFullscreen] = useState(false);
+  isFullscreenRef.current = isFullscreen;
   const [showGrid, setShowGrid] = useState(true);
   const [showNames, setShowNames] = useState(true);
   const [showVisionCones, setShowVisionCones] = useState(true);
@@ -973,6 +988,30 @@ export default function Page() {
   const autoFollowMapRef = useRef(autoFollowMap);
   autoFollowMapRef.current = autoFollowMap;
 
+  const throttleUiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastLatencyRef = useRef<number | null>(null);
+
+  const handleSelectTab = useCallback((tab: "players" | "utils" | "raw" | "api" | "shortcuts") => {
+    setActiveTab(tab);
+    if (tab === "raw") {
+      setRawPayload(latestRawRef.current || latestPayloadRef.current);
+    }
+  }, []);
+
+  // Listen to tab visibility to pause DOM updates when user is playing CS2
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (!document.hidden && latestPayloadRef.current) {
+        setPayload(latestPayloadRef.current);
+        if (activeTabRef.current === "raw") {
+          setRawPayload(latestRawRef.current || latestPayloadRef.current);
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
   // Process incoming telemetry packet
   const handleIncomingPayload = useCallback(
     (incomingData: unknown) => {
@@ -980,7 +1019,6 @@ export default function Page() {
       const incomingObj = incomingData as Record<string, unknown>;
 
       const rawToSave = incomingObj._raw !== undefined ? incomingObj._raw : incomingData;
-      setRawPayload(rawToSave);
 
       const data = transformExecutorPayload(
         incomingObj as unknown as ExecutorPayload
@@ -988,13 +1026,39 @@ export default function Page() {
 
       const now = Date.now();
       if (data.timestamp) {
-        setLatency(Math.max(0, now - data.timestamp));
+        lastLatencyRef.current = Math.max(0, now - data.timestamp);
       }
-      setPayload(data);
-      setPacketCount((c) => c + 1);
+
+      // 1. Direct Real-Time 60FPS Canvas Update (0 React Overhead / 0 React Re-renders!)
+      radarCanvasRef.current?.updatePayload(data);
+
+      latestPayloadRef.current = data;
+      latestRawRef.current = rawToSave;
       lastPacketDateRef.current = now;
-      setLastPacketTime(new Date().toLocaleTimeString());
-      sfx.playPing();
+
+      // 2. Throttled UI State Update (Batch DOM updates to ~5.5Hz so CS2 gets 100% CPU)
+      if (!throttleUiTimerRef.current) {
+        throttleUiTimerRef.current = setTimeout(() => {
+          throttleUiTimerRef.current = null;
+
+          // If window/tab is minimized/hidden in background, skip DOM diffs
+          if (typeof document !== "undefined" && document.hidden) return;
+
+          if (latestPayloadRef.current) {
+            setPayload(latestPayloadRef.current);
+          }
+          if (lastLatencyRef.current !== null) {
+            setLatency(lastLatencyRef.current);
+          }
+          setPacketCount((c) => c + 1);
+          setLastPacketTime(new Date().toLocaleTimeString());
+
+          // Only update raw JSON state if the RAW JSON tab is currently active and visible
+          if (activeTabRef.current === "raw" && !isFullscreenRef.current) {
+            setRawPayload(latestRawRef.current);
+          }
+        }, 180); // 180ms delay for React DOM roster/health/armor/weapon batching
+      }
 
       if (autoFollowMapRef.current && data.map) {
         const autoMap = normalizeMapId(data.map);
@@ -1044,6 +1108,9 @@ export default function Page() {
         const parsed = JSON.parse(raw as string);
 
         if (parsed?.type === "CLEARED") {
+          latestPayloadRef.current = null;
+          latestRawRef.current = null;
+          radarCanvasRef.current?.updatePayload(null);
           setPayload(null);
           setRawPayload(null);
           setStatus("awaiting");
@@ -1077,7 +1144,10 @@ export default function Page() {
           if (json?.state || json?.raw) {
             const rawObj = json.raw ?? json.state;
             const stateObj = json.state ?? json.raw;
-            setRawPayload(rawObj);
+            latestRawRef.current = rawObj;
+            if (activeTabRef.current === "raw" && !isFullscreenRef.current) {
+              setRawPayload(rawObj);
+            }
             handleIncomingPayload({ ...stateObj, _raw: rawObj });
           }
         }
@@ -1127,12 +1197,24 @@ export default function Page() {
         setMockTick((t) => {
           const next = t + 1;
           const p = generateMockPayload(selectedMap, next);
-          setPayload(p);
-          setLatency(0);
-          setStatus("live");
-          setPacketCount((c) => c + 1);
+          radarCanvasRef.current?.updatePayload(p);
+          latestPayloadRef.current = p;
+          latestRawRef.current = p;
           lastPacketDateRef.current = Date.now();
-          setLastPacketTime(new Date().toLocaleTimeString());
+
+          if (!throttleUiTimerRef.current) {
+            throttleUiTimerRef.current = setTimeout(() => {
+              throttleUiTimerRef.current = null;
+              if (latestPayloadRef.current) setPayload(latestPayloadRef.current);
+              setLatency(0);
+              setStatus("live");
+              setPacketCount((c) => c + 1);
+              setLastPacketTime(new Date().toLocaleTimeString());
+              if (activeTabRef.current === "raw" && !isFullscreenRef.current) {
+                setRawPayload(latestRawRef.current);
+              }
+            }, 180);
+          }
           return next;
         });
       }, 30);
@@ -1150,6 +1232,9 @@ export default function Page() {
   };
 
   const handleClearRadar = async () => {
+    latestPayloadRef.current = null;
+    latestRawRef.current = null;
+    radarCanvasRef.current?.updatePayload(null);
     setPayload(null);
     setRawPayload(null);
     setSelectedPlayerId(null);
@@ -1404,8 +1489,43 @@ export default function Page() {
             <span className="truncate">{badgeConfig.label}</span>
           </div>
 
-          {/* Performance Pill: FPS & Ping */}
+          {/* Performance Pill & Zero FPS Drop Mode */}
           <div className="hidden md:flex items-center gap-2 bg-black/40 border border-white/[0.06] rounded-lg px-2.5 py-1 text-[11px] font-mono">
+            {/* Zero FPS Drop Turbo Switch */}
+            <button
+              onClick={() => setPerformanceMode((v) => !v)}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-all font-bold ${
+                performanceMode
+                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm"
+                  : "bg-white/[0.03] text-slate-400 border border-white/[0.06] hover:text-slate-200"
+              }`}
+              title="Zero In-Game FPS Drop: Disables GPU blurs, caps DPR fill-rate, caches vector map layers"
+            >
+              <Zap className={`w-3 h-3 ${performanceMode ? "text-emerald-400 fill-emerald-400" : "text-slate-500"}`} />
+              <span>{performanceMode ? "⚡ ZERO FPS DROP: ON" : "TURBO MODE: OFF"}</span>
+            </button>
+
+            <span className="text-slate-700">|</span>
+
+            {/* FPS Cap Selector */}
+            <div className="flex items-center gap-1">
+              <span className="text-slate-500 text-[10px]">CAP:</span>
+              <select
+                value={fpsCap}
+                onChange={(e) => setFpsCap(Number(e.target.value))}
+                className="bg-black/60 border border-white/[0.08] text-slate-300 rounded px-1.5 py-0.5 text-[10px] font-mono outline-none cursor-pointer hover:border-white/[0.2]"
+                title="Limit Radar rendering FPS to save CS2 in-game frame rates"
+              >
+                <option value={30}>30 FPS (Ultra Low CPU)</option>
+                <option value={60}>60 FPS (Recommended)</option>
+                <option value={120}>120 FPS (High Refresh)</option>
+                <option value={0}>Uncapped (Monitor Hz)</option>
+              </select>
+            </div>
+
+            <span className="text-slate-700">|</span>
+
+            {/* Live Render FPS */}
             <div className="flex items-center gap-1">
               <Activity className="w-3 h-3 text-slate-500" />
               <span className={fps >= 50 ? "text-emerald-400 font-semibold" : "text-amber-400 font-semibold"}>
@@ -1453,6 +1573,21 @@ export default function Page() {
           >
             {useMock ? <Pause className="w-3.5 h-3.5 text-amber-400" /> : <Play className="w-3.5 h-3.5 text-slate-400" />}
             <span className="hidden sm:inline">{useMock ? "SIMULATOR ON" : "DEMO SIM"}</span>
+          </button>
+
+          {/* Telemetry Deck Toggle (Hidden by default to save 100% CPU) */}
+          <button
+            onClick={() => setInspectorSize((s) => (s === "hidden" ? "compact" : "hidden"))}
+            className={`text-xs font-mono font-medium px-2.5 py-1.5 rounded-lg border transition-all active:scale-95 flex items-center gap-1.5 min-h-[38px] ${
+              inspectorSize !== "hidden"
+                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300 shadow-sm"
+                : "bg-white/[0.03] border-white/[0.06] text-slate-400 hover:text-slate-200 hover:border-white/[0.12]"
+            }`}
+            title="Toggle Telemetry Inspector (Key: I)"
+            aria-label="Toggle Telemetry Deck"
+          >
+            <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden sm:inline">{inspectorSize !== "hidden" ? "TELEMETRY ON" : "TELEMETRY"}</span>
           </button>
 
           {/* Landscape Fullscreen Quick Button */}
@@ -1697,6 +1832,35 @@ export default function Page() {
                         onChange={setShowGrid}
                         icon={<Grid className="w-3.5 h-3.5" />}
                       />
+                    </div>
+                  </div>
+
+                  {/* Mobile Performance & FPS Cap Section */}
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-mono font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>PERFORMANCE ENGINE</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      <ToggleSwitch
+                        label="⚡ Zero FPS Drop Mode"
+                        checked={performanceMode}
+                        onChange={setPerformanceMode}
+                        icon={<Zap className="w-3.5 h-3.5 text-emerald-400" />}
+                      />
+                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/[0.06] flex items-center justify-between text-xs font-mono">
+                        <span className="text-slate-400">Frame Rate Cap:</span>
+                        <select
+                          value={fpsCap}
+                          onChange={(e) => setFpsCap(Number(e.target.value))}
+                          className="bg-black/80 border border-white/[0.1] text-slate-200 rounded px-2 py-1 text-xs font-mono outline-none"
+                        >
+                          <option value={30}>30 FPS (Low CPU)</option>
+                          <option value={60}>60 FPS (Balanced)</option>
+                          <option value={120}>120 FPS (High Refresh)</option>
+                          <option value={0}>Uncapped (Max)</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
 
@@ -1966,6 +2130,36 @@ export default function Page() {
                     </div>
                   </div>
 
+                  {/* Performance Engine & Zero In-Game FPS Drop */}
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-mono font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>PERFORMANCE ENGINE</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      <ToggleSwitch
+                        label="⚡ Zero In-Game FPS Drop"
+                        shortcut="Turbo"
+                        checked={performanceMode}
+                        onChange={setPerformanceMode}
+                        icon={<Zap className="w-3.5 h-3.5 text-emerald-400" />}
+                      />
+                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/[0.06] flex items-center justify-between text-xs font-mono">
+                        <span className="text-slate-400">FPS Render Limit:</span>
+                        <select
+                          value={fpsCap}
+                          onChange={(e) => setFpsCap(Number(e.target.value))}
+                          className="bg-black/80 border border-white/[0.1] text-slate-200 rounded px-2 py-1 text-xs font-mono outline-none cursor-pointer"
+                        >
+                          <option value={30}>30 FPS (Max FPS in-game)</option>
+                          <option value={60}>60 FPS (Recommended)</option>
+                          <option value={120}>120 FPS (High Refresh)</option>
+                          <option value={0}>Uncapped (Monitor Hz)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Actions (Clear Radar) */}
                   <div className="pt-2">
                     <button
@@ -1998,6 +2192,7 @@ export default function Page() {
             }`}
           >
             <RadarCanvas
+              ref={radarCanvasRef}
               mapId={selectedMap}
               payload={payload}
               onFpsUpdate={setFps}
@@ -2012,6 +2207,8 @@ export default function Page() {
               isFollowingPlayer={isFollowingPlayer}
               onSelectPlayer={handleSelectPlayer}
               onZoomChange={setRadarZoom}
+              fpsCap={fpsCap}
+              performanceMode={performanceMode}
             />
 
             {/* Top-Left Tactical Badge */}
@@ -2546,18 +2743,13 @@ export default function Page() {
             )}
           </div>
 
-          {/* ── Bottom Telemetry Inspector Deck ── */}
-          <div
-            className={`${getInspectorHeightClass()} shrink-0 bg-[#0c0e14]/90 border border-white/[0.06] rounded-2xl flex flex-col overflow-hidden backdrop-blur-xl shadow-2xl transition-all duration-300 ${
-              isFullscreen
-                ? "translate-y-24 opacity-0 pointer-events-none h-0 p-0 border-0"
-                : inspectorSize === "modal"
-                ? "hidden"
-                : "translate-y-0 opacity-100"
-            }`}
-          >
-            {/* Inspector Header & Controls */}
-            <div className="h-9 border-b border-white/[0.06] px-3 flex items-center justify-between bg-black/30 gap-2">
+          {/* ── Bottom Telemetry Inspector Deck (Hidden by default to save 100% CPU/DOM) ── */}
+          {inspectorSize !== "hidden" && inspectorSize !== "modal" && !isFullscreen && (
+            <div
+              className={`${getInspectorHeightClass()} shrink-0 bg-[#0c0e14]/90 border border-white/[0.06] rounded-2xl flex flex-col overflow-hidden backdrop-blur-xl shadow-2xl transition-all duration-300 translate-y-0 opacity-100`}
+            >
+              {/* Inspector Header & Controls */}
+              <div className="h-9 border-b border-white/[0.06] px-3 flex items-center justify-between bg-black/30 gap-2">
               {/* Left Title & Status Badges */}
               <div className="flex items-center gap-2 shrink-0">
                 <Terminal className="w-3.5 h-3.5 text-cyan-400" />
@@ -2612,7 +2804,7 @@ export default function Page() {
                 {/* Tabs */}
                 <div className="flex items-center bg-black/40 border border-white/[0.06] p-0.5 rounded-md">
                   <button
-                    onClick={() => setActiveTab("players")}
+                    onClick={() => handleSelectTab("players")}
                     className={`px-2 py-0.5 rounded text-[11px] font-mono transition-all ${
                       activeTab === "players"
                         ? "bg-[#181c28] text-white font-semibold border border-white/[0.08]"
@@ -2622,7 +2814,7 @@ export default function Page() {
                     ROSTER
                   </button>
                   <button
-                    onClick={() => setActiveTab("utils")}
+                    onClick={() => handleSelectTab("utils")}
                     className={`px-2 py-0.5 rounded text-[11px] font-mono transition-all ${
                       activeTab === "utils"
                         ? "bg-[#181c28] text-white font-semibold border border-white/[0.08]"
@@ -2632,7 +2824,7 @@ export default function Page() {
                     UTILS
                   </button>
                   <button
-                    onClick={() => setActiveTab("raw")}
+                    onClick={() => handleSelectTab("raw")}
                     className={`px-2 py-0.5 rounded text-[11px] font-mono transition-all ${
                       activeTab === "raw"
                         ? "bg-[#181c28] text-white font-semibold border border-white/[0.08]"
@@ -2642,7 +2834,7 @@ export default function Page() {
                     RAW JSON
                   </button>
                   <button
-                    onClick={() => setActiveTab("api")}
+                    onClick={() => handleSelectTab("api")}
                     className={`px-2 py-0.5 rounded text-[11px] font-mono transition-all hidden md:inline-block ${
                       activeTab === "api"
                         ? "bg-[#181c28] text-white font-semibold border border-white/[0.08]"
@@ -2652,7 +2844,7 @@ export default function Page() {
                     API
                   </button>
                   <button
-                    onClick={() => setActiveTab("shortcuts")}
+                    onClick={() => handleSelectTab("shortcuts")}
                     className={`px-2 py-0.5 rounded text-[11px] font-mono transition-all hidden lg:inline-block ${
                       activeTab === "shortcuts"
                         ? "bg-[#181c28] text-white font-semibold border border-white/[0.08]"
@@ -2686,6 +2878,13 @@ export default function Page() {
                     title="Pop-out Fullscreen Inspector Dialog"
                   >
                     <Maximize2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setInspectorSize("hidden")}
+                    className="p-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-mono transition-all"
+                    title="Close Telemetry Deck (Save 100% CPU)"
+                  >
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
@@ -3078,8 +3277,9 @@ export default function Page() {
               )}
             </div>
           </div>
-        </main>
-      </div>
+        )}
+      </main>
+    </div>
 
       {/* ── Maximized Telemetry Inspector Modal Dialog ── */}
       {inspectorSize === "modal" && (
@@ -3109,7 +3309,7 @@ export default function Page() {
               <div className="flex items-center gap-2">
                 <div className="flex items-center bg-black/50 border border-white/[0.08] p-0.5 rounded-lg">
                   <button
-                    onClick={() => setActiveTab("raw")}
+                    onClick={() => handleSelectTab("raw")}
                     className={`px-3 py-1 rounded-md text-xs font-mono font-medium transition-all ${
                       activeTab === "raw"
                         ? "bg-[#181c28] text-white border border-white/[0.08]"
@@ -3119,7 +3319,7 @@ export default function Page() {
                     RAW JSON
                   </button>
                   <button
-                    onClick={() => setActiveTab("players")}
+                    onClick={() => handleSelectTab("players")}
                     className={`px-3 py-1 rounded-md text-xs font-mono font-medium transition-all ${
                       activeTab === "players"
                         ? "bg-[#181c28] text-white border border-white/[0.08]"
@@ -3129,7 +3329,7 @@ export default function Page() {
                     PLAYERS TABLE
                   </button>
                   <button
-                    onClick={() => setActiveTab("utils")}
+                    onClick={() => handleSelectTab("utils")}
                     className={`px-3 py-1 rounded-md text-xs font-mono font-medium transition-all ${
                       activeTab === "utils"
                         ? "bg-[#181c28] text-white border border-white/[0.08]"
@@ -3139,7 +3339,7 @@ export default function Page() {
                     UTILITIES
                   </button>
                   <button
-                    onClick={() => setActiveTab("api")}
+                    onClick={() => handleSelectTab("api")}
                     className={`px-3 py-1 rounded-md text-xs font-mono font-medium transition-all ${
                       activeTab === "api"
                         ? "bg-[#181c28] text-white border border-white/[0.08]"
